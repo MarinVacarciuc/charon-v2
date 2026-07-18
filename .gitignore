@@ -1,0 +1,61 @@
+# ---- Secrets & credentials (NEVER commit) ----
+secrets.h
+**/secrets.h
+*secret*
+!**/secrets.example.h
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+config.local.*
+**/.tg_token
+**/.el_key
+
+# ---- Biometric / personal data (GDPR Art. 9 — NEVER commit) ----
+server/data/
+**/faces/
+**/known_faces/
+**/enrolled/
+**/staff_db/
+**/staff/
+**/captures/
+*.embeddings
+*.npy
+*.dat
+
+# ---- SQLite database (holds biometric embeddings — NEVER commit) ----
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+
+# ---- ML models (large ONNX, downloaded, not source) ----
+*.onnx
+**/haarcascade_*.xml
+
+# ---- Voice cache ----
+voice_cache/
+voice_samples/
+
+# ---- Python ----
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+*.egg-info/
+
+# ---- Firmware build (PlatformIO / Arduino) ----
+.pio/
+build/
+*.bin
+*.elf
+
+# ---- Editors / OS ----
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.log
