@@ -17,7 +17,7 @@ never report a passage - no separate build needed.
 ```bash
 cp secrets.example.h charon_node/secrets.h
 chmod 600 charon_node/secrets.h
-# then edit: wifi candidates, OTA password
+# then edit: wifi candidates
 ```
 
 `secrets.h` is gitignored and excluded from the OneDrive mirror. Never commit it.
@@ -30,12 +30,19 @@ chmod 600 charon_node/secrets.h
 ./ota_node.sh  gate-in                            # wireless, once the board already runs this firmware
 ```
 
-Both scripts rewrite `#define NODE_ID` in `secrets.h` and recompile, because
-identity is baked into the binary. `ota_node.sh` greps the OTA password out of
-`secrets.h`, so rotating it there is the whole rotation.
+Both scripts rewrite `#define NODE_ID` in `secrets.h` and recompile, because identity
+is baked into the binary.
 
 The very first flash of any board must go over USB: OTA needs firmware that already
 speaks OTA.
+
+**OTA is unauthenticated on this build.** Anyone on the same network can push firmware
+to a node, so only run the nodes on a network you control. This is a deliberate
+trade-off rather than an omission: a password baked into the image has to stay in sync
+with `secrets.h`, and any mismatch locks a board out of wireless updates and forces it
+off the wall for a USB flash - a poor bargain on a private hotspot during a two-week
+build. Authenticated OTA and signed images are recorded as designed-not-built in
+`docs/REPORT_NOTES.md`.
 
 ## Build target
 

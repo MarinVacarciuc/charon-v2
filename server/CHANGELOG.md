@@ -30,6 +30,21 @@ Groundwork before any system code.
   and a UDP path to a phone that is no longer part of the design; rewritten against the
   actual code.
 
+## Unreleased - 2026-09-02, after v0-baseline
+
+- **OTA authentication removed by decision.** v0-baseline rotated the shared OTA password;
+  it has now been dropped entirely and wireless updates are unauthenticated. The password is
+  compiled into the image, so it has to stay in sync between `secrets.h` and whatever is
+  already running on each board, and a mismatch does not fail gracefully: it locks that
+  board out of wireless updates and forces it off the wall for a USB flash. On a private
+  hotspot, over a fourteen-day build with six wall-mounted boards, that availability hazard
+  costs more than the threat it defends against. Recorded as a documented limitation in
+  `docs/REPORT_NOTES.md` alongside the production position (signed images, not merely
+  authenticated ones). Threat model C4 moves from *planned* to *consciously declined*.
+- Added `docs/REPORT_NOTES.md`: running evidence for the report, written as decisions are
+  made. Carries the measurements taken so far and an explicit list of numbers inherited from
+  the old project that must be re-measured on this build rather than quoted second-hand.
+
 ## v1-firmware - in progress
 
 Node firmware v2. Written and compiling (37% flash, 19% RAM); not yet on hardware.
@@ -52,4 +67,5 @@ Node firmware v2. Written and compiling (37% flash, 19% RAM); not yet on hardwar
   returns. Both college SSIDs were dropped from the candidate list entirely.
 - Interior boards no longer poll the PASS sensor at all. Nothing is wired to 41/40 there, so
   every other tick was spending the full 25 ms `pulseIn` timeout to learn nothing.
-- OTA now drops the camera before accepting an image: flash writes and camera DMA do not mix.
+- OTA drops the camera before accepting an image: flash writes and camera DMA do not mix.
+- OTA is unauthenticated by decision (see the entry above).

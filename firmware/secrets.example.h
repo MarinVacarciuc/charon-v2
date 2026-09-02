@@ -22,12 +22,8 @@ static const CharonAp CHARON_APS[] = {
 };
 static const int CHARON_AP_COUNT = sizeof(CHARON_APS) / sizeof(CHARON_APS[0]);
 
-// Shared across all six nodes so firmware ships over wifi with ota_node.sh after
-// the one initial cable flash. ota_node.sh greps this value out of secrets.h, so
-// changing it here is the whole rotation. Rotate it if it is ever exposed - and
-// note that rotating locally locks you out of OTA on boards still running the old
-// password, which then need one more USB flash.
-#define OTA_PASSWORD "changeme"
+// NOTE: there is no OTA password. Wireless updates on this build are unauthenticated,
+// which is an accepted prototype risk on a private network. See docs/REPORT_NOTES.md.
 
 // This node's identity, also its mDNS name: <NODE_ID>.local
 // flash_node.sh and ota_node.sh rewrite this line in place per board, so whatever

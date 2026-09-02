@@ -413,8 +413,13 @@ void setup() {
       MDNS.addService("http", "tcp", 80);
       Serial.printf("[charon] name http://%s.local/status\n", NODE_ID);
     }
+    // OTA is deliberately UNAUTHENTICATED on this build. Anyone on the same network can
+    // push firmware to a node. That is an accepted risk for a prototype that only ever runs
+    // on a private phone hotspot, and it buys back a real hazard: a password baked into the
+    // image has to stay in sync with secrets.h, and any mismatch locks the board out of
+    // wireless updates and forces it off the wall for a USB flash. Authenticated OTA, and
+    // signed images, are written up as designed-not-built - see docs/REPORT_NOTES.md.
     ArduinoOTA.setHostname(NODE_ID);
-    ArduinoOTA.setPassword(OTA_PASSWORD);
     ArduinoOTA.onStart([]() {
       // Flash writes and camera DMA do not mix; drop the camera before taking an image.
       cameraSleep();
