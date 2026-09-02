@@ -1,0 +1,13 @@
+# Brain runtime. Python 3.12 (Homebrew) - see server/README.md.
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+pydantic==2.10.4
+pydantic-settings==2.7.0
+aiosqlite==0.20.0
+aiohttp==3.11.11
+python-multipart==0.0.20
+
+# Recognition. opencv-contrib carries FaceDetectorYN (YuNet) and FaceRecognizerSF
+# (SFace), so no dlib and no separate model runtime are needed.
+numpy>=2.0
+opencv-contrib-python>=4.10

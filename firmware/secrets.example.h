@@ -1,25 +1,49 @@
 #pragma once
-// Copy this file to `secrets.h` next to the sketch and fill in real values.
-// `secrets.h` is gitignored and must never be committed.
+// TEMPLATE. Copy to charon_node/secrets.h and fill in. secrets.h is gitignored,
+// excluded from the OneDrive mirror, and must never be committed.
+//
+//   cp secrets.example.h charon_node/secrets.h && chmod 600 charon_node/secrets.h
 
-// Networks the node may join; strongest available wins (WiFiMulti). List every network the
-// node will ever see (home, demo hotspot, site) so demo day needs no reflash.
-// ESP32 is 2.4 GHz only: a 5 GHz-only hotspot is invisible to it, and a WPA2-Enterprise
-// network (802.1X username+password) will not work with a plain PSK like this.
+// Networks this node may join. WiFiMulti picks the STRONGEST candidate, not the
+// intended one. Keep this list SHORT: an unrelated AP that happens to be closer
+// will silently outrank the network you meant to use, and six wall-mounted boards
+// on the wrong SSID look identical to six dead boards. List only the networks the
+// node genuinely needs, and prune before a demo.
+//
+// Two hardware facts that decide what belongs here:
+//   * The ESP32 has no 5 GHz radio. On a band-split router only the "<name>_2g"
+//     half is ever visible; listing the 5 GHz name just adds a candidate that
+//     always fails.
+//   * WPA2-Enterprise (802.1X, user + password, e.g. most campus networks) cannot
+//     be joined with a plain PSK at all.
 struct CharonAp { const char *ssid; const char *pass; };
 static const CharonAp CHARON_APS[] = {
   {"YOUR_WIFI_SSID", "YOUR_WIFI_PASSWORD"},
 };
 static const int CHARON_AP_COUNT = sizeof(CHARON_APS) / sizeof(CHARON_APS[0]);
 
-// This node's identity. Also its mDNS name: <NODE_ID>.local
-// Planned set: gate-in, gate-out, zone-reception, zone-warehouse, zone-workshop, zone-server
+// Shared across all six nodes so firmware ships over wifi with ota_node.sh after
+// the one initial cable flash. ota_node.sh greps this value out of secrets.h, so
+// changing it here is the whole rotation. Rotate it if it is ever exposed - and
+// note that rotating locally locks you out of OTA on boards still running the old
+// password, which then need one more USB flash.
+#define OTA_PASSWORD "changeme"
+
+// This node's identity, also its mDNS name: <NODE_ID>.local
+// flash_node.sh and ota_node.sh rewrite this line in place per board, so whatever
+// is here is only the value of the last flash.
+// Set: gate-in, gate-out, zone-reception, zone-warehouse, zone-workshop, zone-server
 #define NODE_ID "gate-in"
 
-// Anything closer than this across the lane counts as a body passing. Calibrate per node.
+// PASS sensor (41/40) - gate lanes only; the four interior boards have nothing
+// wired to these pins and simply never report a passage. Closer than this across
+// the lane counts as a body crossing, which is what commits an entry or exit.
+// First-boot default only: the live value is set over HTTP and persisted in NVS,
+// and must be calibrated at the real mounting spot. Desk calibration does not
+// transfer (measured: 13-200 cm frame-to-frame from multipath on a cluttered desk).
 #define PASS_DIST_CM 100
 
-// Approach/presence sensor (39/38): closer than this = someone is here.
+// NEAR sensor (39/38) - every node. Closer than this = someone is here, wake the
+// camera. Allow for the ~1 s camera re-init: 2.5 m gives a walking person about a
+// second of margin before they are in frame.
 #define WAKE_DIST_CM 250
-
-#define OTA_PASSWORD "changeme"

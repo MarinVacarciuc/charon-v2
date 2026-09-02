@@ -1,3 +1,25 @@
+> **ARCHIVED 2026-09-02. Superseded by `docs/BUILD_PLAN.md`.**
+>
+> Kept deliberately, not deleted: this is the first-iteration design, and the
+> differences between it and the current plan are the iteration story itself (P6).
+>
+> What changed and why:
+> * It was written on 18.07, one day **before** `DEMO_ARCHITECTURE_2026-07-19.md`,
+>   so it predates the decision that the deliverable is an edited video rather than
+>   a live performance. Several of its priorities were tuned for the wrong target.
+> * Its Arduino design put the Uno on USB serial into the Mac, with the brain
+>   sending `"HB\n"`. The gate is in the yard and the Mac is in the house, so the
+>   demo beat could not actually be filmed that way. The Uno now stands alone at
+>   the gate on a heartbeat GPIO wire from `gate-in`.
+> * Its Uno behaviour was a latching alarm on approach. It is now a green
+>   "pass" light: the point of the beat is that the perimeter keeps working.
+> * It did not include the camera-off-by-default node behaviour, which is the
+>   LO4 privacy and energy story.
+>
+> What survived unchanged, because it was right: FastAPI + asyncio + SQLite(WAL)
+> + SSE, one task per node under a supervisor, the unconditional-assignment rule
+> for `except` blocks, IPv4-explicit mDNS resolution, and config-as-data.
+
 # Charon/Cerberus — Ground-Up Server Rebuild
 
 > Рабочий репозиторий: **`~/IdeaProjects/charon`** (git), НЕ текущий cwd (OneDrive/IoT).

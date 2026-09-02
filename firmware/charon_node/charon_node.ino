@@ -1,15 +1,29 @@
 /*
-  Charon node - firmware v1 (gate / zone camera).
+  Charon node - firmware v2 (gate / zone camera + ultrasonic appliance).
 
-  Serves one JPEG at  http://<node>/shot.jpg  and announces itself as <NODE_ID>.local.
-  That URL is exactly what the brain (prototype/process_server.py) already polls, so a node
-  drops into CAM["url"] with no server-side change, and mDNS means a new hotspot IP does not
-  have to be retyped.
+  The node makes no decisions. It reports what its sensors read and, when someone is
+  actually there, what its camera sees. All policy lives in the brain.
 
-  Camera routing is NOT the same across ESP32-S3 "CAM" boards - the FPC traces differ per
-  vendor and a wrong map fails as "camera probe failed (0x105)". Rather than hard-code one,
-  boot tries the known maps and keeps the first that initialises; the winner is printed on
-  serial and shown at /, so it can be pinned once this batch is identified.
+  Three things changed from v1, each for a stated reason:
+
+  1. The camera is OFF until the near sensor says someone is here. Cameras that do not
+     record until a person is present is the privacy-by-design and energy story, and it
+     is cheap: WiFi stays up, which also keeps the 18650 boost bank above its
+     low-current auto-cutoff (a true deep sleep trips that cutoff on this exact power
+     hardware - measured, not theorised).
+
+  2. /status serves the sensor and health picture as JSON without touching the camera,
+     so the brain can poll every node continuously while five of six cameras stay dark.
+     The passage counter rides on it, which is what commits an entry or exit.
+
+  3. A heartbeat square wave on GPIO 21 says "the smart path is alive": this board is
+     up, on WiFi, AND has heard from the brain recently. An Arduino Uno at the gate
+     watches this one wire and takes the gate over when it stops. Crashing, losing
+     WiFi and the brain dying all collapse it identically, which is the point.
+
+  Camera routing differs between vendors of this connector style, so boot probes the
+  known maps and pins the winner in NVS; later wakes use the pinned map directly and
+  re-probe only if it ever stops working.
 */
 #include "esp_camera.h"
 #include <WiFi.h>
@@ -20,22 +34,28 @@
 #include <ArduinoOTA.h>
 #include "secrets.h"
 
-// Thresholds depend on the geometry of the spot each node ends up in, which is not known at flash
-// time. Keep them settable over HTTP and persisted in NVS: six nodes on six walls must not each need
-// a USB cable to be re-calibrated. The secrets.h values are only first-boot defaults.
+#define FW_VERSION "2.0.0"
+
+// Thresholds depend on the geometry of the spot each node ends up in, which is not known
+// at flash time. Settable over HTTP and persisted in NVS: six nodes on six walls must not
+// each need a USB cable to be recalibrated. secrets.h values are first-boot defaults only.
 Preferences prefs;
 
-WiFiMulti wifiMulti;   // node roams between home / demo hotspot / college without a reflash
+WiFiMulti wifiMulti;
 
-// RCWL-1601 ultrasonics, powered from 3V3 so their echo is 3.3V logic straight into a GPIO - no
-// divider (an HC-SR04 at 5V would need one). Free pins here: the camera holds 4-18, octal PSRAM
-// holds 33-37, flash 26-32, USB 19/20. (GPIO34-39 were input-only on the original ESP32; the S3 has
-// no input-only pins, so 39 can drive a TRIG.)
+// Only the gate lanes have a second sensor soldered to 41/40. On an interior board those
+// pins read no echo, and every poll of them would block the full pulseIn timeout (25 ms)
+// for nothing. Identity is baked in at flash time, so decide once at boot.
+static bool hasPass = false;
+
+// RCWL-1601 ultrasonics, powered from 3V3 so their echo is 3.3V logic straight into a GPIO
+// - no divider (an HC-SR04 at 5V would need one). Free pins here: the camera holds 4-18,
+// octal PSRAM holds 33-37, flash 26-32, USB 19/20.
 //
-// NEAR (39/38) means the same thing on every node: "someone is here". At the gate it is the approach
-// sensor that wakes the camera; in a zone it is the presence sensor. PASS (41/40) exists only on the
-// gate lanes and means a body actually crossed. An interior node simply has nothing wired to 41/40,
-// reads no echo, and never reports a passage - no separate firmware needed.
+// NEAR (39/38) means the same thing on every node: "someone is here". At the gate it wakes
+// the camera; in a zone it wakes the camera and nothing else. PASS (41/40) exists only on
+// the gate lanes and means a body actually crossed the lane - that is the event the brain
+// commits an entry or exit on.
 struct Sonar {
   const char *name;
   uint8_t trig, echo;
@@ -48,15 +68,29 @@ struct Sonar {
 static Sonar S_NEAR = {"near", 39, 38, WAKE_DIST_CM, -1, false, false, 0};
 static Sonar S_PASS = {"pass", 41, 40, PASS_DIST_CM, -1, false, false, 0};
 
-// Access-decision LEDs. GPIO1/2 are free on every one of these boards (not camera, not octal
-// PSRAM/flash, not USB, not a strapping pin) - unlike GPIO48/38, which some ESP32-S3 devkits wire to
-// an onboard NeoPixel but this bare WROOM breakout does not have, so a real LED must be soldered here.
-// The brain commands these over HTTP after it decides granted/denied; the node auto-clears whichever
-// is lit after LED_HOLD_MS so a dropped "off" command (WiFi hiccup) cannot leave a colour stuck lit.
+// Access-decision LEDs. GPIO1/2 are free on every one of these boards (not camera, not
+// octal PSRAM/flash, not USB, not a strapping pin). Designed and driven here; not
+// currently soldered, which costs nothing - the brain's calls are simply invisible.
 #define LED_GREEN_PIN 1
 #define LED_RED_PIN   2
 #define LED_HOLD_MS   3000
 static uint32_t ledOffAt = 0;
+
+// Heartbeat to the Arduino Uno failover at the gate. 3.3V out into a 5V-tolerant Uno
+// input, one direction only, never the reverse. A square wave rather than a level so a
+// stuck-high pin cannot masquerade as a healthy system.
+#define HB_PIN            21
+#define HB_HALF_PERIOD_MS 500      // -> 1 Hz
+#define HB_BRAIN_TIMEOUT_MS 5000   // no brain contact this long = the smart path is down
+static bool     hbLevel = false;
+static uint32_t hbToggledAt = 0;
+static uint32_t lastBrainMs = 0;   // 0 = the brain has never spoken to us since boot
+
+// Camera power state. Waking costs about a second of re-init, which is why the near
+// sensor wakes it rather than the first frame request.
+#define CAM_IDLE_MS 20000
+static bool     camOn = false;
+static uint32_t camIdleAt = 0;
 
 static volatile uint32_t passages = 0;   // monotonic; the brain watches this increment
 
@@ -67,17 +101,18 @@ struct PinMap {
   int8_t vsync, href, pclk;
 };
 
-// Taken verbatim from the Arduino esp32 core camera_pins.h (v3.3.8). The S3-EYE routing is what
-// most generic "ESP32-S3 WROOM CAM" boards clone, so it is tried first.
+// Taken verbatim from the Arduino esp32 core camera_pins.h (v3.3.8). The S3-EYE routing is
+// what most generic "ESP32-S3 WROOM CAM" boards clone, so it is tried first, and it is the
+// one confirmed working on all six of these boards.
 static const PinMap MAPS[] = {
   {"esp32s3-eye / freenove-s3-wroom", -1, -1, 15,  4,  5, 16, 17, 18, 12, 10,  8,  9, 11,  6,  7, 13},
   {"xiao-esp32s3-sense",              -1, -1, 10, 40, 39, 48, 11, 12, 14, 16, 18, 17, 15, 38, 47, 13},
   {"esp32s3-cam-lcd",                 -1, -1, 40, 17, 18, 39, 41, 42, 12,  3, 14, 47, 13, 21, 38, 11},
 };
 static const int N_MAPS = sizeof(MAPS) / sizeof(MAPS[0]);
+static int pinnedMap = -1;                       // index into MAPS, remembered in NVS
 
 WebServer server(80);
-static const char *activeMap = "none";
 
 static bool startCamera(const PinMap &m) {
   camera_config_t c = {};
@@ -95,12 +130,62 @@ static bool startCamera(const PinMap &m) {
   c.pin_pclk  = m.pclk;
   c.xclk_freq_hz = 20000000;
   c.pixel_format = PIXFORMAT_JPEG;
-  c.frame_size   = FRAMESIZE_VGA;                 // 640x480 - the Mac does the recognition, the node just feeds it
+  c.frame_size   = FRAMESIZE_VGA;                 // 640x480 - the Mac does the recognition
   c.jpeg_quality = 12;
   c.fb_count     = psramFound() ? 2 : 1;
   c.fb_location  = psramFound() ? CAMERA_FB_IN_PSRAM : CAMERA_FB_IN_DRAM;
-  c.grab_mode    = CAMERA_GRAB_LATEST;            // hand the brain the newest frame, never a queued stale one
+  c.grab_mode    = CAMERA_GRAB_LATEST;            // newest frame, never a queued stale one
   return esp_camera_init(&c) == ESP_OK;
+}
+
+// Probe every known map and remember the winner, so a wake never pays for three attempts.
+static bool probeAndPinMap() {
+  for (int i = 0; i < N_MAPS; i++) {
+    Serial.printf("[charon] camera map '%s' ... ", MAPS[i].name);
+    if (startCamera(MAPS[i])) {
+      Serial.println("OK");
+      pinnedMap = i;
+      prefs.putInt("cammap", i);
+      return true;                                 // leaves the camera INITIALISED
+    }
+    Serial.println("no");
+    esp_camera_deinit();                           // a failed init still claims the pins
+    delay(200);
+  }
+  Serial.println("[charon] no known camera map worked.");
+  Serial.println("[charon] check: FPC fully seated + latch closed, board really has PSRAM.");
+  return false;
+}
+
+static bool cameraWake() {
+  if (camOn) { camIdleAt = millis() + CAM_IDLE_MS; return true; }
+  bool ok = false;
+  if (pinnedMap >= 0) {
+    ok = startCamera(MAPS[pinnedMap]);
+    if (!ok) {
+      // The pinned map stopped working (swapped module, reseated ribbon). Re-probe rather
+      // than staying blind forever.
+      Serial.println("[charon] pinned camera map failed, re-probing");
+      esp_camera_deinit();
+      delay(200);
+      ok = probeAndPinMap();
+    }
+  } else {
+    ok = probeAndPinMap();
+  }
+  if (ok) {
+    camOn = true;
+    camIdleAt = millis() + CAM_IDLE_MS;
+    Serial.printf("[charon] camera ON (%s)\n", MAPS[pinnedMap].name);
+  }
+  return ok;
+}
+
+static void cameraSleep() {
+  if (!camOn) return;
+  esp_camera_deinit();
+  camOn = false;
+  Serial.printf("[charon] camera OFF (idle) heap=%u\n", (unsigned)ESP.getFreeHeap());
 }
 
 static float readDistanceCm(const Sonar &s) {
@@ -111,16 +196,15 @@ static float readDistanceCm(const Sonar &s) {
   return us ? us / 58.0f : -1.0f;
 }
 
-// Two ultrasonics on one board must never ping together or each hears the other's echo and reports
-// a phantom wall. So exactly one fires per tick and they alternate.
+// Two ultrasonics on one board must never ping together or each hears the other's echo and
+// reports a phantom wall. So exactly one fires per tick and they alternate.
 //
-// HYSTERESIS: a single trip distance is not enough. Clutter/multipath near the threshold (measured
-// live on a cluttered desk: readings bouncing 17-65cm around a 60cm threshold) crosses one boundary
-// back and forth on pure noise, counting a "passage" every time - 6 phantom counts in 8 seconds with
-// nobody there. So the clearing distance is pushed HYST_CM further out than the tripping distance:
-// once blocked, it stays blocked until the reading is unambiguously clear, so noise that never
-// actually leaves the vicinity of the sensor cannot re-trigger a second phantom count.
-// Two agreeing readings still debounce a single noisy sample before any transition is trusted.
+// HYSTERESIS: a single trip distance is not enough. Clutter/multipath near the threshold
+// (measured live: readings bouncing 17-65 cm around a 60 cm threshold) crosses one boundary
+// back and forth on pure noise, counting a "passage" every time - 6 phantom counts in 8
+// seconds with nobody there. So the clearing distance is pushed HYST_CM further out than
+// the tripping distance: once blocked, it stays blocked until the reading is unambiguously
+// clear. Two agreeing readings still debounce a single noisy sample before any transition.
 #define HYST_CM 20
 static bool pollSonar(Sonar &s) {
   s.cm = readDistanceCm(s);
@@ -136,15 +220,58 @@ static bool pollSonar(Sonar &s) {
   return false;
 }
 
+// Any request from the brain is proof the brain is alive. That, plus our own WiFi state,
+// is exactly what the heartbeat asserts.
+static void noteBrainContact() { lastBrainMs = millis(); }
+
+static void handleStatus() {
+  noteBrainContact();
+  String s = "{";
+  s += "\"node\":\"" NODE_ID "\"";
+  s += ",\"fw\":\"" FW_VERSION "\"";
+  s += ",\"mac\":\"" + WiFi.macAddress() + "\"";
+  s += ",\"ssid\":\"" + WiFi.SSID() + "\"";        // joining the wrong network must be visible, not silent
+  s += ",\"rssi\":" + String(WiFi.RSSI());
+  s += ",\"ip\":\"" + WiFi.localIP().toString() + "\"";
+  s += ",\"uptime_s\":" + String(millis() / 1000);
+  s += ",\"heap\":" + String((unsigned)ESP.getFreeHeap());
+  s += ",\"die_c\":" + String(temperatureRead(), 1);
+  s += ",\"cam_on\":" + String(camOn ? "true" : "false");
+  s += ",\"cam_map\":\"" + String(pinnedMap >= 0 ? MAPS[pinnedMap].name : "none") + "\"";
+  s += ",\"has_pass\":" + String(hasPass ? "true" : "false");
+  s += ",\"passages\":" + String(passages);
+  s += ",\"near_cm\":" + String(S_NEAR.cm, 1);
+  s += ",\"near\":" + String(S_NEAR.blocked ? "true" : "false");
+  s += ",\"wake_cm\":" + String(S_NEAR.thresh);
+  s += ",\"pass_cm\":" + String(S_PASS.cm, 1);
+  s += ",\"pass_blocked\":" + String(S_PASS.blocked ? "true" : "false");
+  s += ",\"pass_thresh_cm\":" + String(S_PASS.thresh);
+  s += "}";
+  server.sendHeader("Cache-Control", "no-store");
+  server.send(200, "application/json", s);
+}
+
 static void handleShot() {
+  noteBrainContact();
+  if (!camOn && !cameraWake()) {
+    server.sendHeader("X-Cam-On", "0");
+    server.send(503, "text/plain", "camera unavailable");
+    return;
+  }
+  camIdleAt = millis() + CAM_IDLE_MS;
   camera_fb_t *fb = esp_camera_fb_get();
-  if (!fb) { server.send(503, "text/plain", "no frame"); return; }
-  // The brain already polls this several times a second, so the passage counter rides along in the
-  // headers: no second request, and the node never needs to know the brain's (changing) address.
+  if (!fb) {
+    server.sendHeader("X-Cam-On", "1");
+    server.send(503, "text/plain", "no frame");
+    return;
+  }
+  // The brain already polls this, so sensor state rides along in the headers: no second
+  // request, and the node never needs to know the brain's (changing) address.
   server.sendHeader("X-Passage", String(passages));
   server.sendHeader("X-Dist-Cm", String(S_PASS.cm, 1));
   server.sendHeader("X-Near-Cm", String(S_NEAR.cm, 1));
   server.sendHeader("X-Near", S_NEAR.blocked ? "1" : "0");
+  server.sendHeader("X-Cam-On", "1");
   server.sendHeader("X-Node", NODE_ID);
   server.setContentLength(fb->len);
   server.sendHeader("Cache-Control", "no-store");
@@ -153,7 +280,22 @@ static void handleShot() {
   esp_camera_fb_return(fb);
 }
 
+// Pre-warm a camera the near sensor has not tripped: the dashboard's "tap a sleeping tile"
+// needs a live picture without waiting for someone to walk up to the board.
+static void handleWake() {
+  noteBrainContact();
+  int sec = server.hasArg("sec") ? server.arg("sec").toInt() : 30;
+  if (sec < 1)   sec = 1;
+  if (sec > 300) sec = 300;
+  bool ok = cameraWake();
+  if (ok) camIdleAt = millis() + (uint32_t)sec * 1000UL;
+  server.send(ok ? 200 : 503, "application/json",
+              String("{\"cam_on\":") + (ok ? "true" : "false") +
+              ",\"for_s\":" + sec + "}");
+}
+
 static void handleLed() {
+  noteBrainContact();
   String st = server.arg("state");
   digitalWrite(LED_GREEN_PIN, st == "green" ? HIGH : LOW);
   digitalWrite(LED_RED_PIN,   st == "red"   ? HIGH : LOW);
@@ -161,17 +303,10 @@ static void handleLed() {
   server.send(200, "text/plain", "led: " + st);
 }
 
-static void handlePassage() {                             // plain view for calibrating the threshold
-  String s = String("{\"node\":\"") + NODE_ID + "\",\"passages\":" + passages +
-             ",\"cm\":" + String(S_PASS.cm, 1) + ",\"blocked\":" + (S_PASS.blocked ? "true" : "false") +
-             ",\"threshold_cm\":" + S_PASS.thresh +
-             ",\"near_cm\":" + String(S_NEAR.cm, 1) + ",\"near\":" + (S_NEAR.blocked ? "true" : "false") +
-             ",\"wake_cm\":" + S_NEAR.thresh + "}";
-  server.send(200, "application/json", s);
-}
-
-// Calibrate in place: /threshold?cm=60 . Persisted, so it survives a reboot or a flat battery.
+// Calibrate in place: /threshold?cm=60&wake=250 . Persisted, so it survives a reboot or a
+// flat battery. Six boards on six walls, none of them reachable with a USB cable.
 static void handleThreshold() {
+  noteBrainContact();
   if (server.hasArg("cm")) {
     int v = server.arg("cm").toInt();
     if (v < 5 || v > 400) { server.send(400, "text/plain", "cm must be 5..400 (sensor range)"); return; }
@@ -185,29 +320,38 @@ static void handleThreshold() {
     prefs.putInt("wakecm", w);
   }
   server.send(200, "application/json",
-              String("{\"threshold_cm\":") + S_PASS.thresh + ",\"cm\":" + String(S_PASS.cm, 1) +
+              String("{\"pass_thresh_cm\":") + S_PASS.thresh + ",\"pass_cm\":" + String(S_PASS.cm, 1) +
               ",\"wake_cm\":" + S_NEAR.thresh + ",\"near_cm\":" + String(S_NEAR.cm, 1) + "}");
 }
 
 static void handleRoot() {
-  String s = String("charon node: ") + NODE_ID + "\n";
-  // The boards are physically identical and the identity lives only in flash, so print the MAC:
-  // it is the only way to tell which lump of hardware is answering to which name.
+  noteBrainContact();
+  String s = String("charon node: ") + NODE_ID + "  (fw " FW_VERSION ")\n";
+  // The boards are physically identical and the identity lives only in flash, so print the
+  // MAC: it is the only way to tell which lump of hardware answers to which name.
   s += String("mac        : ") + WiFi.macAddress() + "\n";
-  s += String("camera map : ") + activeMap + "\n";
+  s += String("camera map : ") + (pinnedMap >= 0 ? MAPS[pinnedMap].name : "none") +
+       (camOn ? "  [ON]\n" : "  [asleep]\n");
+  s += String("ssid       : ") + WiFi.SSID() + "\n";
   s += String("ip         : ") + WiFi.localIP().toString() + "\n";
   s += String("rssi       : ") + WiFi.RSSI() + " dBm\n";
   s += String("psram      : ") + (psramFound() ? "yes" : "no") + "\n";
+  s += String("heap       : ") + (unsigned)ESP.getFreeHeap() + " B\n";
   s += String("uptime     : ") + (millis() / 1000) + " s\n";
-  // Die temperature, not room temperature: this is the SoC's own junction sensor. Useful for
-  // judging whether continuous capture + no modem sleep is cooking the module.
+  // Die temperature, not room temperature: the SoC's own junction sensor.
   s += String("die temp   : ") + String(temperatureRead(), 1) + " C\n";
+  s += String("heartbeat  : ") + (lastBrainMs && millis() - lastBrainMs < HB_BRAIN_TIMEOUT_MS
+                                  ? "pulsing (brain heard from)" : "SILENT (no brain contact)") + "\n";
   s += String("near  39/38: ") + String(S_NEAR.cm, 1) + " cm" + (S_NEAR.blocked ? "  [SOMEONE]" : "  [clear]  ") +
        "  wakes under " + S_NEAR.thresh + " cm\n";
-  s += String("pass  41/40: ") + String(S_PASS.cm, 1) + " cm" + (S_PASS.blocked ? "  [BLOCKED]" : "  [clear]  ") +
-       "  counts under " + S_PASS.thresh + " cm\n";
-  s += String("passages   : ") + passages + "\n";
-  s += "frame      : /shot.jpg\n";
+  if (hasPass) {
+    s += String("pass  41/40: ") + String(S_PASS.cm, 1) + " cm" + (S_PASS.blocked ? "  [BLOCKED]" : "  [clear]  ") +
+         "  counts under " + S_PASS.thresh + " cm\n";
+    s += String("passages   : ") + passages + "\n";
+  } else {
+    s += "pass  41/40: not fitted on this node (interior board)\n";
+  }
+  s += "status     : /status\nframe      : /shot.jpg\n";
   server.send(200, "text/plain", s);
 }
 
@@ -215,71 +359,87 @@ void setup() {
   Serial.begin(115200);
   delay(300);
   Serial.println();
-  Serial.println("[charon] node " NODE_ID " booting");
+  Serial.println("[charon] node " NODE_ID " fw " FW_VERSION " booting");
+
+  hasPass = (strncmp(NODE_ID, "gate", 4) == 0);
+  Serial.printf("[charon] role: %s\n", hasPass ? "gate lane (near + pass)" : "interior zone (near only)");
+
   prefs.begin("charon", false);
   S_PASS.thresh = prefs.getInt("passcm", PASS_DIST_CM);
   S_NEAR.thresh = prefs.getInt("wakecm", WAKE_DIST_CM);
+  pinnedMap     = prefs.getInt("cammap", -1);
   Serial.printf("[charon] pass<%dcm  near<%dcm\n", S_PASS.thresh, S_NEAR.thresh);
   Serial.printf("[charon] psram: %s\n", psramFound() ? "found" : "MISSING (check board flash/psram setting)");
 
-  bool ok = false;
-  for (int i = 0; i < N_MAPS && !ok; i++) {
-    Serial.printf("[charon] camera map '%s' ... ", MAPS[i].name);
-    if (startCamera(MAPS[i])) {
-      ok = true;
-      activeMap = MAPS[i].name;
-      Serial.println("OK");
-    } else {
-      Serial.println("no");
-      esp_camera_deinit();                        // a failed init still claims the pins; release before the next try
-      delay(200);
-    }
-  }
-  if (!ok) {
-    Serial.println("[charon] no known camera map worked.");
-    Serial.println("[charon] check: FPC fully seated + latch closed, camera is OV2640, board really has PSRAM.");
+  // Probe once at first boot to learn and remember the map, then put the camera straight
+  // back to sleep: nothing should be recording until someone is actually here.
+  if (pinnedMap < 0) {
+    if (probeAndPinMap()) { camOn = true; cameraSleep(); }
+  } else {
+    Serial.printf("[charon] camera map pinned: %s (asleep until someone approaches)\n", MAPS[pinnedMap].name);
   }
 
   WiFi.mode(WIFI_STA);
-  WiFi.setSleep(false);                           // modem sleep adds frame latency and hotspot drops; nodes are powered
-  for (int i = 0; i < CHARON_AP_COUNT; i++) wifiMulti.addAP(CHARON_APS[i].ssid, CHARON_APS[i].pass);
-  Serial.printf("[charon] wifi: trying %d network(s) ", CHARON_AP_COUNT);
+  WiFi.setSleep(false);                           // modem sleep adds frame latency and hotspot drops
+
+  // PREFERRED network first, explicitly. WiFiMulti on its own joins whichever candidate is
+  // STRONGEST, which is not the same as the one that is correct: on shoot day a house
+  // router nearer the gate than the phone hotspot would pull some boards onto the home
+  // network while others joined the hotspot, and the laptop can only sit on one of them.
+  // Half the nodes would then read OFFLINE with nothing on screen explaining why. Trying
+  // CHARON_APS[0] by name first removes that by construction; the rest stay as fallbacks.
+  Serial.printf("[charon] wifi: preferred '%s' ", CHARON_APS[0].ssid);
+  WiFi.begin(CHARON_APS[0].ssid, CHARON_APS[0].pass);
   uint32_t t0 = millis();
-  while (wifiMulti.run() != WL_CONNECTED && millis() - t0 < 20000) { delay(400); Serial.print("."); }
+  while (WiFi.status() != WL_CONNECTED && millis() - t0 < 8000) { delay(400); Serial.print("."); }
   Serial.println();
+
+  if (WiFi.status() != WL_CONNECTED && CHARON_AP_COUNT > 1) {
+    Serial.printf("[charon] preferred not available, falling back to %d other network(s) ",
+                  CHARON_AP_COUNT - 1);
+    WiFi.disconnect();
+    for (int i = 1; i < CHARON_AP_COUNT; i++) wifiMulti.addAP(CHARON_APS[i].ssid, CHARON_APS[i].pass);
+    t0 = millis();
+    while (wifiMulti.run() != WL_CONNECTED && millis() - t0 < 12000) { delay(400); Serial.print("."); }
+    Serial.println();
+  }
   if (WiFi.status() != WL_CONNECTED) {
     Serial.println("[charon] wifi FAILED - none in range, wrong password, 5 GHz-only hotspot,");
     Serial.println("[charon] or the network is WPA2-Enterprise (needs 802.1X, not a plain password).");
   } else {
-    Serial.printf("[charon] joined '%s'\n", WiFi.SSID().c_str());
-    Serial.printf("[charon] ip   http://%s/shot.jpg\n", WiFi.localIP().toString().c_str());
+    Serial.printf("[charon] joined '%s' (%d dBm)\n", WiFi.SSID().c_str(), WiFi.RSSI());
+    Serial.printf("[charon] ip   http://%s/status\n", WiFi.localIP().toString().c_str());
     if (MDNS.begin(NODE_ID)) {                    // survives the hotspot handing out a different IP
       MDNS.addService("http", "tcp", 80);
-      Serial.printf("[charon] name http://%s.local/shot.jpg\n", NODE_ID);
+      Serial.printf("[charon] name http://%s.local/status\n", NODE_ID);
     }
-    // Password-protected OTA: once this build is on a board over USB, every later change (a new
-    // threshold default, a bugfix, a new pin map) ships to a wall-mounted node over wifi. No more
-    // pulling six boards off the wall and re-cabling them for a one-line firmware change.
     ArduinoOTA.setHostname(NODE_ID);
     ArduinoOTA.setPassword(OTA_PASSWORD);
-    ArduinoOTA.onStart([]() { Serial.println("[charon] OTA update starting..."); });
+    ArduinoOTA.onStart([]() {
+      // Flash writes and camera DMA do not mix; drop the camera before taking an image.
+      cameraSleep();
+      Serial.println("[charon] OTA update starting...");
+    });
     ArduinoOTA.onEnd([]()   { Serial.println("[charon] OTA update done, rebooting"); });
     ArduinoOTA.onError([](ota_error_t e) { Serial.printf("[charon] OTA error %u\n", e); });
     ArduinoOTA.begin();
     Serial.println("[charon] OTA ready (network upload, password-protected)");
   }
 
-  for (Sonar *s : {&S_NEAR, &S_PASS}) {
-    pinMode(s->trig, OUTPUT); pinMode(s->echo, INPUT); digitalWrite(s->trig, LOW);
-  }
+  pinMode(S_NEAR.trig, OUTPUT); pinMode(S_NEAR.echo, INPUT); digitalWrite(S_NEAR.trig, LOW);
+  if (hasPass) { pinMode(S_PASS.trig, OUTPUT); pinMode(S_PASS.echo, INPUT); digitalWrite(S_PASS.trig, LOW); }
+
   pinMode(LED_GREEN_PIN, OUTPUT); pinMode(LED_RED_PIN, OUTPUT);
   digitalWrite(LED_GREEN_PIN, LOW); digitalWrite(LED_RED_PIN, LOW);
 
-  server.on("/", handleRoot);
-  server.on("/shot.jpg", handleShot);
-  server.on("/passage", handlePassage);
+  pinMode(HB_PIN, OUTPUT); digitalWrite(HB_PIN, LOW);
+
+  server.on("/",          handleRoot);
+  server.on("/status",    handleStatus);
+  server.on("/shot.jpg",  handleShot);
+  server.on("/wake",      handleWake);
   server.on("/threshold", handleThreshold);
-  server.on("/led", handleLed);
+  server.on("/led",       handleLed);
   server.begin();
   Serial.println("[charon] ready");
 }
@@ -287,23 +447,68 @@ void setup() {
 void loop() {
   ArduinoOTA.handle();
   server.handleClient();
-  if (ledOffAt && (int32_t)(millis() - ledOffAt) >= 0) {   // self-clearing: a lost "off" never leaves a colour stuck
+
+  if (ledOffAt && (int32_t)(millis() - ledOffAt) >= 0) {   // a lost "off" never leaves a colour stuck
     digitalWrite(LED_GREEN_PIN, LOW); digitalWrite(LED_RED_PIN, LOW);
     ledOffAt = 0;
   }
 
-  static uint32_t lastPing = 0;
-  static bool turn = false;
-  if (millis() - lastPing > 35) {         // alternating -> each sonar still gets ~14 reads/s
-    lastPing = millis();
-    turn = !turn;
-    if (turn) { if (pollSonar(S_PASS)) passages++; }   // a body crossed the lane
-    else      { pollSonar(S_NEAR); }                   // approach/presence: reported, brain decides
+  // Heartbeat. Deliberately conjunctive: our own radio AND recent proof the brain is
+  // there. Any single failure in the smart path stops the wave, and the Uno cannot tell
+  // (or care) which one it was.
+  bool smartPathUp = (WiFi.status() == WL_CONNECTED) &&
+                     lastBrainMs && (millis() - lastBrainMs < HB_BRAIN_TIMEOUT_MS);
+  if (!smartPathUp) {
+    if (hbLevel) { hbLevel = false; digitalWrite(HB_PIN, LOW); }
+  } else if (millis() - hbToggledAt >= HB_HALF_PERIOD_MS) {
+    hbToggledAt = millis();
+    hbLevel = !hbLevel;
+    digitalWrite(HB_PIN, hbLevel ? HIGH : LOW);
   }
 
+  static uint32_t lastPing = 0;
+  static bool turn = false;
+  if (millis() - lastPing > 35) {
+    lastPing = millis();
+    if (hasPass) {
+      turn = !turn;
+      if (turn) { if (pollSonar(S_PASS)) passages++; }   // a body crossed the lane
+      else      { if (pollSonar(S_NEAR)) cameraWake(); } // approach: wake, do not decide
+    } else {
+      if (pollSonar(S_NEAR)) cameraWake();               // interior board: near only
+    }
+    // Someone still standing there keeps the camera alive without re-triggering.
+    if (S_NEAR.blocked && camOn) camIdleAt = millis() + CAM_IDLE_MS;
+  }
+
+  if (camOn && (int32_t)(millis() - camIdleAt) >= 0) cameraSleep();
+
+  // A node that silently loses wifi reads OFFLINE to the brain, so keep retrying - but
+  // retry the PREFERRED network first for the same reason it is preferred at boot.
+  // Without this, a node that briefly drops the hotspot settles onto the house network
+  // and never comes back, which looks identical to a dead board.
   static uint32_t lastCheck = 0;
-  if (millis() - lastCheck > 5000) {              // a node that silently loses wifi is a node the brain calls OFFLINE
+  if (millis() - lastCheck > 5000) {
     lastCheck = millis();
-    if (wifiMulti.run() != WL_CONNECTED) Serial.println("[charon] wifi lost, retrying");
+    if (WiFi.status() != WL_CONNECTED) {
+      Serial.println("[charon] wifi lost, retrying preferred first");
+      WiFi.begin(CHARON_APS[0].ssid, CHARON_APS[0].pass);
+    } else if (CHARON_AP_COUNT > 1 && WiFi.SSID() != String(CHARON_APS[0].ssid)) {
+      // Connected, but to a fallback. If the preferred network has come back (the phone
+      // hotspot was switched on late), move to it rather than staying split from the brain.
+      int n = WiFi.scanComplete();
+      if (n == WIFI_SCAN_FAILED) { WiFi.scanNetworks(true); }
+      else if (n > 0) {
+        for (int i = 0; i < n; i++) {
+          if (WiFi.SSID(i) == String(CHARON_APS[0].ssid)) {
+            Serial.printf("[charon] preferred '%s' is back, switching\n", CHARON_APS[0].ssid);
+            WiFi.disconnect();
+            WiFi.begin(CHARON_APS[0].ssid, CHARON_APS[0].pass);
+            break;
+          }
+        }
+        WiFi.scanDelete();
+      }
+    }
   }
 }
