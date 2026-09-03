@@ -28,8 +28,16 @@ The two ONNX models live in `server/models/` (gitignored, ~39 MB):
 ## Run
 
 ```bash
-server/.venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8770 --app-dir server
+server/run.sh
 ```
+
+Binds to all interfaces and prints the URLs the other devices should use. Do **not** start it
+on `127.0.0.1`: a second browser on this Mac will work fine while the phone at the gate cannot
+connect at all, which looks like a phone problem and is not. The demo needs at least two other
+devices to reach the brain - the gate terminal screen and the phone filming the Telegram token.
+
+The laptop's address comes from the hotspot's DHCP and can change when the hotspot phone is
+restarted, so read it from the script's output rather than memorising it.
 
 ## Layout
 
