@@ -129,6 +129,59 @@ one every 8-90s with USB connected. The practical rule this sets: a board goes
 fully to battery before any real test, USB is for flashing only - which
 matters for how field recon days are run, not just as a curiosity.
 
+## v3.1-recognition - 2026-09-03
+
+Recognition pipeline: engine, identity tracker, per-person aggregation, enrolment.
+
+app/recognition/engine.py wraps YuNet + SFace, kept deliberately face-agnostic and
+threshold-agnostic - detect() returns every face rather than picking "the
+largest" (REBUILD_PROMPT §0.6.5: baking that choice into the engine was the old
+build's actual tailgating blind spot), and recognise() reports a candidate's raw
+score and margin rather than an accept/reject decision, so is_confident_match()
+can be a separate, pure function tested with fabricated numbers. Aggregation is
+max-over-a-person's-samples, not best-sample-across-the-whole-roster (the old
+engine had no per-person step at all, so one lucky enrolment sample could win
+outright); margin is the gap to the best OTHER person, never to the winner's
+own second-best sample. 11 unit tests, all against synthetic vectors - no
+camera, no model files needed to verify the arithmetic.
+
+app/recognition/tracker.py: identity commits only after K consecutive agreeing
+frames, and - deliberately - needs no separate "misses before dropping"
+parameter, because a miss (no confident match) is just another candidate value
+subject to the same K-frame gate. Same two-variable candidate-plus-agreement
+shape as the firmware's ultrasonic debounce (pollSonar), reused deliberately.
+8 unit tests, including the two that matter most: a single stray miss must not
+drop a committed identity, and a different person needs their own full run of
+K frames to take over the commitment, not just one lucky frame.
+
+app/db/repositories/{people,embeddings}.py: person CRUD scoped to what
+enrolment needs today (not front-loading Day 6/8's access-editing work), and
+embedding storage as raw float32 BLOBs stamped with model_version so a future
+recogniser swap cannot silently start matching old vectors against new ones.
+Round-trip tested against a real temporary database, including that a repeat
+enrolment for an existing name adds a sample rather than duplicating the
+person.
+
+API: POST /people/enroll?name=&role=&node= (node is REQUIRED - REBUILD_PROMPT
+§0.6.4's enrolment-camera-ambiguity bug, and here the equivalent for a frame
+with more than one face: refuses rather than guessing which one is the
+subject), GET /people, DELETE /people/{id}/samples, and GET
+/people/recognise?node= as a tuning readout mirroring the old build's on-screen
+"name score" overlay, as JSON instead of pixels.
+
+Verified end to end against a live person (Marin, indoors, incidental
+lighting - the real enrolment is Day 10 in the yard per REBUILD_PROMPT §10),
+not just unit tests: enrol -> recognise on a genuinely different frame scored
+0.625, inside the 0.63-0.93 own-face range this exact camera hardware measured
+previously - a real cross-check that alignment/normalisation are wired
+correctly. A live tracked sequence showed the confidence gate refuse to commit
+on a single lucky frame while the subject moved, and a second sequence showed
+it hold a committed identity through two consecutive sub-threshold frames
+before recovering - the frame-to-frame jitter behaviour DEMO_ARCHITECTURE §4
+describes, caught on real jitter, not asserted. Full sequences in
+docs/REPORT_NOTES.md. Test data deleted immediately after; the roster is empty
+again.
+
 ## v1-firmware - 2026-09-03 (tagged retroactively same-day, on the commit where all six boards were confirmed)
 
 Node firmware v2. Written and compiling (37% flash, 19% RAM); not yet on hardware.

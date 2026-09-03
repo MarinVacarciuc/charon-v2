@@ -260,6 +260,47 @@ quoted second-hand:
 | Phantom passages without hysteresis | 6 in 8 s with nobody present | already fixed; cite as the reason hysteresis exists |
 | Ultrasonic multipath on a cluttered desk | 13 to 200 cm frame to frame | **reproduced: 33-233 cm, see above** |
 
+### Recognition pipeline, end to end against a live person, 2026-09-03
+
+**Status: built and verified live, not just unit-tested.** Marin stood in front of gate-in
+(indoors, incidental lighting, rain having postponed the real field recon) for a real
+enrol-then-recognise round trip through the running server, not a synthetic test.
+
+One sample enrolled (`POST /people/enroll`, detection score 0.862). Recognising a genuinely
+different frame moments later, not the enrolment frame itself, scored **0.625** - inside the
+0.63-0.93 own-face range this exact camera hardware measured in the previous build
+(REBUILD_PROMPT §0.4), which is a strong cross-check that alignment and normalisation are
+wired correctly, not just "some number came back."
+
+With only one enrolled sample, a first tracked sequence showed the fragility a single angle
+has to pose change: of 6 frames as the subject moved, only 1 cleared the confidence gate, and
+`IdentityTracker` correctly refused to commit on that lone hit - exactly the discipline it
+exists to enforce, and a concrete argument for REBUILD_PROMPT §10's "several angles and
+lightings" during real enrolment, not just received wisdom.
+
+A second sequence, subject holding still, is the cleanest demonstration of the whole design
+working as one:
+
+| Frame | Raw match | Score | Committed |
+|---|---|---|---|
+| 1 | RainTest | 0.769 | - |
+| 2 | RainTest | 0.761 | - |
+| 3 | RainTest | 0.809 | **RainTest** (3rd consecutive frame) |
+| 4 | RainTest | 0.552 | RainTest |
+| 5 | none (0.424 - below the 0.45 threshold) | 0.424 | **RainTest** (held) |
+| 6 | none (0.419) | 0.419 | **RainTest** (held) |
+| 7 | RainTest | 0.608 | RainTest |
+| 8 | RainTest | 0.582 | RainTest |
+
+Frames 5-6 are the finding: two consecutive sub-threshold readings, and the tracker did not
+drop the identity, exactly the sticky-hysteresis behaviour it was designed for (see
+app/recognition/tracker.py) and exactly what DEMO_ARCHITECTURE §4 calls "kills the
+frame-to-frame jitter bug class" - caught here on a real person's real jitter, not asserted.
+
+Test data (person "RainTest" and its embedding) deleted immediately after - this was a
+pipeline check, not real roster data. Real enrolment is Day 10, in the yard, in the actual
+shoot lighting, per REBUILD_PROMPT §10's own lesson.
+
 ### A board on USB power flaps on WiFi while battery-only boards do not, 2026-09-03
 
 **Status: confirmed by a controlled before/after test on live hardware.**

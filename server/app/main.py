@@ -11,9 +11,11 @@ import logging
 import aiohttp
 from fastapi import FastAPI
 
-from .api import routes_nodes
+from .api import routes_nodes, routes_people
 from .config import get_settings
 from .db.database import Database
+from .db.repositories import embeddings
+from .recognition.engine import RecognitionEngine
 from .nodes.events_sink import BrainEvents
 from .nodes.registry import NodeRegistry
 from .push.hub import SseHub
@@ -25,6 +27,7 @@ log = logging.getLogger(__name__)
 def create_app() -> FastAPI:
     app = FastAPI(title="Charon brain")
     app.include_router(routes_nodes.router)
+    app.include_router(routes_people.router)
 
     @app.on_event("startup")
     async def startup() -> None:
@@ -32,6 +35,15 @@ def create_app() -> FastAPI:
 
         db = Database(settings.db_path, settings.migrations_dir)
         await db.connect()
+
+        engine = RecognitionEngine(
+            str(settings.models_dir / "face_detection_yunet_2023mar.onnx"),
+            str(settings.models_dir / "face_recognition_sface_2021dec.onnx"),
+        )
+        roster = await embeddings.load_all(db)
+        engine.load_samples(roster)
+        log.info("recognition engine loaded: %d enrolled people, %d total samples",
+                 engine.enrolled_people, sum(len(v) for v in roster.values()))
 
         session = aiohttp.ClientSession()
         hub = SseHub()
@@ -42,6 +54,7 @@ def create_app() -> FastAPI:
 
         app.state.settings = settings
         app.state.db = db
+        app.state.engine = engine
         app.state.session = session
         app.state.hub = hub
         app.state.registry = registry
