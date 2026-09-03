@@ -50,6 +50,15 @@ class BrainEvents:
         # freshest count available rather than a fresh detect() on every passage tick.
         self._last_face_count: dict[str, int] = {}
 
+    def reset_live_state(self) -> None:
+        """Drop every per-node tracker and pending decision - called by the take reset.
+        Without this, a committed identity or a pending decision from the previous take
+        survives into the next one and the first passage of a new take could bind to
+        someone who is no longer even in frame."""
+        self._gate_states.clear()
+        self._zone_states.clear()
+        self._last_face_count.clear()
+
     # ------------------------------------------------------------------ node health
 
     async def node_online(self, node: NodeLive) -> None:

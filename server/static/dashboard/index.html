@@ -1,0 +1,391 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Charon · access control</title>
+<style>
+/* Built for a 1080p screen recording, which drives most of these choices: nothing smaller
+   than 13px, high contrast, and state carried by more than colour alone. The previous
+   build's console put its most important text at 10-12px in grey - unreadable once the
+   recording is scaled, which is the specific mistake this avoids. */
+:root{
+  --bg:#0b0e14; --panel:#141922; --panel2:#1b2230; --line:#28313f;
+  --ink:#e8eef7; --ink-dim:#93a1b5; --ink-faint:#5f6d80;
+  --live:#3ddc84; --armed:#5c7a99; --offline:#ff5c5c;
+  --grant:#3ddc84; --deny:#ff5c5c; --warn:#ffb02e; --accent:#37c8d4;
+}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%}
+body{
+  background:var(--bg); color:var(--ink);
+  font:15px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif;
+  display:flex; flex-direction:column; overflow:hidden;
+}
+
+/* ---------- header ---------- */
+header{
+  display:flex; align-items:center; gap:24px;
+  padding:14px 22px; border-bottom:1px solid var(--line); background:var(--panel);
+}
+.brand{font-size:22px; font-weight:700; letter-spacing:.02em}
+.brand span{color:var(--accent)}
+.clock{font-variant-numeric:tabular-nums; font-size:20px; color:var(--ink-dim)}
+.hcount{margin-left:auto; display:flex; gap:26px; align-items:center}
+.stat{text-align:right}
+.stat b{display:block; font-size:26px; line-height:1; font-variant-numeric:tabular-nums}
+.stat i{font-style:normal; font-size:12px; color:var(--ink-faint); text-transform:uppercase; letter-spacing:.08em}
+.banner{
+  display:none; padding:6px 14px; border-radius:6px; font-weight:600;
+  background:rgba(255,92,92,.15); color:var(--deny); border:1px solid rgba(255,92,92,.4);
+}
+.banner.on{display:block}
+
+/* ---------- node strip ---------- */
+.strip{display:flex; gap:10px; padding:10px 22px; border-bottom:1px solid var(--line); background:var(--panel2)}
+.chip{
+  flex:1; display:flex; align-items:center; gap:9px;
+  padding:8px 12px; border-radius:8px; background:var(--panel); border:1px solid var(--line);
+}
+.dot{width:10px; height:10px; border-radius:50%; flex:none}
+.chip .nm{font-weight:600; font-size:14px}
+.chip .st{margin-left:auto; font-size:11px; text-transform:uppercase; letter-spacing:.07em; color:var(--ink-faint)}
+/* Three states that must never be confusable: a sleeping camera is not a dead one. */
+.chip.live   .dot{background:var(--live); box-shadow:0 0 8px var(--live)}
+.chip.live   .st{color:var(--live)}
+.chip.armed  .dot{background:var(--armed)}
+.chip.armed  .st{color:var(--armed)}
+.chip.offline{border-color:rgba(255,92,92,.5); background:rgba(255,92,92,.08)}
+.chip.offline .dot{background:var(--offline); box-shadow:0 0 8px var(--offline)}
+.chip.offline .st{color:var(--offline)}
+
+/* ---------- main split ---------- */
+main{flex:1; display:grid; grid-template-columns:62fr 38fr; gap:14px; padding:14px 22px; min-height:0}
+.pane{display:flex; flex-direction:column; min-height:0}
+.pane > h2{
+  margin:0 0 10px; font-size:12px; font-weight:700; letter-spacing:.12em;
+  text-transform:uppercase; color:var(--ink-faint);
+}
+
+/* ---------- zone board ---------- */
+.board{flex:1; display:grid; grid-template-columns:repeat(6,1fr); gap:9px; min-height:0}
+.col{display:flex; flex-direction:column; background:var(--panel); border:1px solid var(--line); border-radius:9px; min-height:0}
+.col > header{
+  display:block; padding:9px 11px; border:0; border-bottom:1px solid var(--line); background:transparent;
+  font-size:12px; font-weight:700; letter-spacing:.05em; text-transform:uppercase; color:var(--ink-dim);
+}
+.col > header b{float:right; color:var(--ink); font-variant-numeric:tabular-nums}
+.col.offsite{opacity:.6}
+.col.unknownzone header{color:var(--warn)}
+.cards{flex:1; overflow-y:auto; padding:8px; display:flex; flex-direction:column; gap:7px}
+.card{
+  background:var(--panel2); border:1px solid var(--line); border-left:3px solid var(--live);
+  border-radius:7px; padding:9px 11px;
+}
+.card .who{font-size:16px; font-weight:650; line-height:1.2}
+.card .meta{margin-top:3px; font-size:12px; color:var(--ink-dim)}
+.card.out{border-left-color:var(--ink-faint)}
+.card.flash{animation:landed 1.6s ease-out}
+@keyframes landed{
+  0%{border-left-color:var(--accent); background:rgba(55,200,212,.22)}
+  100%{border-left-color:var(--live); background:var(--panel2)}
+}
+
+/* ---------- anomaly feed ---------- */
+.feed{flex:1; overflow-y:auto; display:flex; flex-direction:column; gap:9px}
+.alert{
+  border-radius:9px; padding:12px 14px; border:1px solid rgba(255,92,92,.45);
+  background:linear-gradient(180deg,rgba(255,92,92,.20),rgba(255,92,92,.09));
+  animation:pop .35s ease-out;
+}
+.alert.warn{border-color:rgba(255,176,46,.45); background:linear-gradient(180deg,rgba(255,176,46,.18),rgba(255,176,46,.07))}
+.alert.ok{border-color:rgba(61,220,132,.45); background:linear-gradient(180deg,rgba(61,220,132,.16),rgba(61,220,132,.06))}
+.alert .kind{font-size:15px; font-weight:800; letter-spacing:.06em; text-transform:uppercase; color:var(--deny)}
+.alert.warn .kind{color:var(--warn)} .alert.ok .kind{color:var(--grant)}
+.alert .body{margin-top:4px; font-size:15px}
+.alert .when{margin-top:3px; font-size:11px; color:var(--ink-faint); font-variant-numeric:tabular-nums}
+.empty{color:var(--ink-faint); font-size:13px; padding:10px 2px}
+@keyframes pop{from{opacity:0; transform:translateY(-7px)} to{opacity:1; transform:none}}
+
+/* ---------- camera tiles ---------- */
+.tiles{display:grid; grid-template-columns:repeat(6,1fr); gap:9px; padding:0 22px 12px}
+.tile{position:relative; aspect-ratio:4/3; background:#000; border:1px solid var(--line); border-radius:8px; overflow:hidden}
+.tile img{width:100%; height:100%; object-fit:cover; display:block}
+.tile .lbl{
+  position:absolute; left:0; right:0; bottom:0; padding:5px 8px;
+  font-size:11px; font-weight:700; letter-spacing:.06em; text-transform:uppercase;
+  background:linear-gradient(0deg,rgba(0,0,0,.85),transparent); color:#fff;
+}
+.tile .ph{
+  position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
+  flex-direction:column; gap:4px; font-size:11px; letter-spacing:.09em; text-transform:uppercase;
+}
+.tile.armed   .ph{color:var(--armed); background:#0c1119}
+.tile.offline .ph{color:var(--offline); background:rgba(255,92,92,.08)}
+.tile.live    .ph{display:none}
+.tile.live img,.tile.armed img,.tile.offline img{opacity:1}
+.tile.armed img,.tile.offline img{display:none}
+
+/* ---------- footer ---------- */
+footer{
+  display:flex; align-items:center; gap:16px;
+  padding:9px 22px; border-top:1px solid var(--line); background:var(--panel);
+}
+.trail{flex:1; min-width:0; font-size:12px; color:var(--ink-dim); font-variant-numeric:tabular-nums;
+       white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+button{
+  font:inherit; font-weight:650; padding:8px 15px; border-radius:7px; cursor:pointer;
+  background:var(--panel2); color:var(--ink); border:1px solid var(--line);
+}
+button:hover{border-color:var(--accent)}
+button.arm{background:rgba(255,92,92,.18); border-color:rgba(255,92,92,.55); color:#ffd7d7}
+</style>
+
+<header>
+  <div class="brand">CHARON<span> · access control</span></div>
+  <div class="clock" id="clock">--:--:--</div>
+  <div class="banner" id="banner"></div>
+  <div class="hcount">
+    <div class="stat"><b id="n-onsite">0</b><i>on site</i></div>
+    <div class="stat"><b id="n-live">0</b><i>cameras live</i></div>
+    <div class="stat"><b id="n-alerts">0</b><i>alerts</i></div>
+  </div>
+</header>
+
+<div class="strip" id="strip"></div>
+
+<main>
+  <section class="pane">
+    <h2>On site by zone</h2>
+    <div class="board" id="board"></div>
+  </section>
+  <section class="pane">
+    <h2>Anomalies</h2>
+    <div class="feed" id="feed"><div class="empty">Nothing flagged yet.</div></div>
+  </section>
+</main>
+
+<div class="tiles" id="tiles"></div>
+
+<footer>
+  <div class="trail" id="trail">audit trail</div>
+  <button id="reset">Reset take</button>
+</footer>
+
+<script>
+const NODES = [
+  {id:"gate-in",        label:"ENTRY · gate-in"},
+  {id:"gate-out",       label:"EXIT · gate-out"},
+  {id:"zone-reception", label:"Reception"},
+  {id:"zone-warehouse", label:"Warehouse"},
+  {id:"zone-workshop",  label:"Workshop"},
+  {id:"zone-server",    label:"Server room"},
+];
+// Column order is fixed and includes two synthetic columns: someone who has entered but has
+// not yet been placed by a zone camera (at_zone is deliberately left empty on entry), and
+// everyone off site.
+const COLUMNS = ["Reception","Warehouse","Workshop","Server room","__unplaced","__offsite"];
+const COLUMN_LABEL = {"__unplaced":"On site · zone unknown","__offsite":"Off site"};
+
+const ALERT_TONE = {  // which alerts are red, which are merely amber
+  wrong_zone:"", unknown_in_zone:"", denied_crossed:"", unidentified_passage:"",
+  concurrent_entry:"", exit_without_entry:"", tailgating:"warn", node_status:"warn",
+};
+const ALERT_TITLE = {
+  wrong_zone:"Wrong zone", unknown_in_zone:"Unknown face", denied_crossed:"Denied but crossed",
+  unidentified_passage:"Unidentified passage", concurrent_entry:"Concurrent entry",
+  exit_without_entry:"Exit without entry", tailgating:"Possible tailgating",
+  gate_decision:"Gate", node_offline:"Node offline",
+};
+
+let people = [], nodes = [], alertCount = 0;
+
+const $ = s => document.querySelector(s);
+const hhmmss = d => d.toTimeString().slice(0,8);
+
+function tick(){ $("#clock").textContent = hhmmss(new Date()); }
+setInterval(tick, 1000); tick();
+
+/* ---------------- node strip + tiles ---------------- */
+function renderStrip(){
+  const byId = Object.fromEntries(nodes.map(n=>[n.id,n]));
+  $("#strip").innerHTML = NODES.map(n=>{
+    const s = byId[n.id];
+    const state = s ? s.state : "offline";
+    const text = state==="live" ? "live" : state==="armed" ? "armed · camera off" : "offline";
+    return `<div class="chip ${state}"><span class="dot"></span>
+            <span class="nm">${n.id}</span><span class="st">${text}</span></div>`;
+  }).join("");
+  const live = nodes.filter(n=>n.state==="live").length;
+  $("#n-live").textContent = live;
+  const off = nodes.filter(n=>n.state==="offline");
+  const b = $("#banner");
+  if(off.length){ b.className="banner on"; b.textContent = `${off.length} node(s) offline: ${off.map(n=>n.id).join(", ")}`; }
+  else b.className = "banner";
+}
+
+function buildTiles(){
+  $("#tiles").innerHTML = NODES.map(n=>`
+    <div class="tile offline" id="tile-${n.id}">
+      <img id="img-${n.id}" alt="">
+      <div class="ph"><span id="ph-${n.id}">offline</span></div>
+      <div class="lbl">${n.label}</div>
+    </div>`).join("");
+  NODES.forEach(n=>pump(n.id));
+}
+// One chained request per tile, and each tile is pinned to its own node for life: the old
+// build had a single preview element that silently swapped between two physical cameras,
+// which reads as "the video is glitching" (REBUILD_PROMPT §0.6.4).
+function pump(id){
+  const img = document.getElementById("img-"+id);
+  const next = () => {
+    const n = nodes.find(x=>x.id===id);
+    if(!n || n.state!=="live"){ setTimeout(next, 700); return; }
+    img.src = `/frame.jpg?node=${id}&t=${Date.now()}`;
+  };
+  img.onload = () => setTimeout(next, 90);
+  img.onerror = () => setTimeout(next, 700);
+  next();
+}
+function syncTiles(){
+  nodes.forEach(n=>{
+    const t = document.getElementById("tile-"+n.id);
+    if(!t) return;
+    t.className = "tile " + n.state;
+    const ph = document.getElementById("ph-"+n.id);
+    if(ph) ph.textContent = n.state==="armed" ? "armed · camera off" : "offline";
+  });
+}
+
+/* ---------------- zone board with FLIP ---------------- */
+function columnOf(p){
+  if(p.presence !== "in") return "__offsite";
+  return p.zone_name || "__unplaced";
+}
+function measure(){
+  const m = new Map();
+  document.querySelectorAll(".card[data-pid]").forEach(el=>{
+    m.set(el.dataset.pid, el.getBoundingClientRect());
+  });
+  return m;
+}
+function renderBoard(prev){
+  const groups = Object.fromEntries(COLUMNS.map(c=>[c,[]]));
+  people.forEach(p=>groups[columnOf(p)].push(p));
+
+  $("#board").innerHTML = COLUMNS.map(c=>{
+    const label = COLUMN_LABEL[c] || c;
+    const cls = c==="__offsite" ? "col offsite" : c==="__unplaced" ? "col unknownzone" : "col";
+    const cards = groups[c].map(p=>`
+      <div class="card ${p.presence==="in"?"":"out"}" data-pid="${p.id}">
+        <div class="who">${p.name}</div>
+        <div class="meta">${p.role_name}${p.presence==="in"&&p.entry_time?" · since "+p.entry_time.slice(11,16):""}</div>
+      </div>`).join("");
+    return `<div class="${cls}"><header>${label}<b>${groups[c].length}</b></header>
+            <div class="cards">${cards}</div></div>`;
+  }).join("");
+
+  if(!prev) return;
+  // FLIP: cards that changed column animate from where they were to where they are now, so a
+  // move is legible on a recording. The old board replaced its innerHTML wholesale and a
+  // person simply vanished from one column and appeared in another between frames.
+  document.querySelectorAll(".card[data-pid]").forEach(el=>{
+    const before = prev.get(el.dataset.pid);
+    if(!before) return;
+    const after = el.getBoundingClientRect();
+    const dx = before.left - after.left, dy = before.top - after.top;
+    if(Math.abs(dx) < 2 && Math.abs(dy) < 2) return;
+    el.style.transition = "none";
+    el.style.transform = `translate(${dx}px,${dy}px)`;
+    requestAnimationFrame(()=>{
+      el.style.transition = "transform .5s cubic-bezier(.22,.7,.2,1)";
+      el.style.transform = "";
+      el.classList.add("flash");
+    });
+  });
+}
+
+/* ---------------- anomaly feed ---------------- */
+function pushAlert(kind, body){
+  const feed = $("#feed");
+  if(feed.querySelector(".empty")) feed.innerHTML = "";
+  const el = document.createElement("div");
+  el.className = "alert " + (ALERT_TONE[kind] ?? "");
+  el.innerHTML = `<div class="kind">${ALERT_TITLE[kind] || kind.replace(/_/g," ")}</div>
+                  <div class="body">${body}</div>
+                  <div class="when">${hhmmss(new Date())}</div>`;
+  feed.prepend(el);
+  while(feed.children.length > 6) feed.lastChild.remove();
+  $("#n-alerts").textContent = ++alertCount;
+}
+
+/* ---------------- data ---------------- */
+async function loadNodes(){
+  try{
+    nodes = (await (await fetch("/nodes")).json()).nodes;
+    renderStrip(); syncTiles();
+  }catch(e){}
+}
+async function loadPeople(animate){
+  try{
+    const prev = animate ? measure() : null;
+    people = (await (await fetch("/people")).json()).people;
+    $("#n-onsite").textContent = people.filter(p=>p.presence==="in").length;
+    renderBoard(prev);
+  }catch(e){}
+}
+async function loadTrail(){
+  try{
+    const rows = (await (await fetch("/audit?limit=3")).json()).entries;
+    $("#trail").textContent = rows.map(r=>`${r.ts.slice(11,19)} ${r.message}`).join("   ·   ") || "audit trail";
+  }catch(e){}
+}
+
+/* ---------------- live stream ---------------- */
+function connect(){
+  const es = new EventSource("/events");
+  es.onmessage = ev => {
+    let d; try{ d = JSON.parse(ev.data); }catch(e){ return; }
+    if(d.type === "node_status"){ loadNodes(); if(d.zone_person) loadPeople(true); }
+    else if(d.type === "passage"){ loadPeople(true); loadTrail(); }
+    else if(d.type === "reset"){ loadPeople(true); loadTrail(); $("#feed").innerHTML='<div class="empty">Nothing flagged yet.</div>'; alertCount=0; $("#n-alerts").textContent=0; }
+    else if(d.type === "alert"){
+      if(d.kind === "gate_decision"){
+        const el = document.createElement("div");
+        const feed = $("#feed");
+        if(feed.querySelector(".empty")) feed.innerHTML = "";
+        el.className = "alert " + (d.granted ? "ok" : "");
+        el.innerHTML = `<div class="kind">${d.granted?"Granted":"Denied"}</div>
+                        <div class="body">${d.message}</div>
+                        <div class="when">${hhmmss(new Date())}</div>`;
+        feed.prepend(el);
+        while(feed.children.length > 6) feed.lastChild.remove();
+      } else {
+        pushAlert(d.kind, d.message);
+      }
+      loadPeople(true); loadTrail();
+    }
+  };
+  es.onerror = () => {};  // EventSource reconnects on its own - that is why this is SSE
+}
+
+/* ---------------- reset (two-click arm, no native confirm) ---------------- */
+let armed = false, armTimer = null;
+$("#reset").onclick = async () => {
+  const b = $("#reset");
+  if(!armed){
+    armed = true; b.classList.add("arm"); b.textContent = "Click again to reset";
+    armTimer = setTimeout(()=>{ armed=false; b.classList.remove("arm"); b.textContent="Reset take"; }, 4000);
+    return;
+  }
+  clearTimeout(armTimer); armed = false;
+  b.classList.remove("arm"); b.textContent = "Reset take";
+  await fetch("/reset", {method:"POST"});
+};
+
+buildTiles();
+loadNodes(); loadPeople(false); loadTrail();
+setInterval(loadNodes, 2000);
+setInterval(()=>loadPeople(true), 5000);   // animate here too: the FLIP pass no-ops when nothing moved,
+                                          // so the safety-net poll stays as legible as an SSE-driven update
+setInterval(loadTrail, 5000);
+connect();
+</script>

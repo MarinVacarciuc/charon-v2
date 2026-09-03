@@ -10,9 +10,11 @@ import logging
 
 import aiohttp
 from fastapi import FastAPI
+from fastapi.responses import RedirectResponse
+from fastapi.staticfiles import StaticFiles
 
-from .api import routes_nodes, routes_people
-from .config import get_settings
+from .api import routes_admin, routes_nodes, routes_people
+from .config import SERVER_DIR, get_settings
 from .db.database import Database
 from .db.repositories import embeddings
 from .recognition.engine import RecognitionEngine
@@ -28,6 +30,7 @@ def create_app() -> FastAPI:
     app = FastAPI(title="Charon brain")
     app.include_router(routes_nodes.router)
     app.include_router(routes_people.router)
+    app.include_router(routes_admin.router)
 
     @app.on_event("startup")
     async def startup() -> None:
@@ -58,6 +61,7 @@ def create_app() -> FastAPI:
         app.state.session = session
         app.state.hub = hub
         app.state.registry = registry
+        app.state.events = events
         log.info("brain up: %d node(s) polling, db at %s", len(registry.all()), settings.db_path)
 
     @app.on_event("shutdown")
@@ -70,6 +74,15 @@ def create_app() -> FastAPI:
     @app.get("/healthz")
     async def healthz():
         return {"ok": True}
+
+    @app.get("/")
+    async def root():
+        # Typing a bare host during filming should land on the product, not a 404.
+        return RedirectResponse("/dashboard/")
+
+    # Plain static files, no build step: the dashboard is hand-written HTML+JS on purpose
+    # (docs/BUILD_PLAN.md) - one fewer moving part to break the day before filming.
+    app.mount("/", StaticFiles(directory=str(SERVER_DIR / "static"), html=True), name="static")
 
     return app
 

@@ -46,10 +46,15 @@ async def get_or_create(db: Database, name: str, role_name: str) -> int:
 
 
 async def list_all(db: Database) -> list[dict]:
+    """The roster, with the role and current zone resolved to NAMES rather than ids - the
+    dashboard groups people into zone columns by name, and making it join ids client-side
+    would put the zone list in a second place that can disagree with the database."""
     rows = await db.fetch_all(
         """
-        SELECT p.*, r.name AS role_name
-        FROM people p JOIN roles r ON r.id = p.role_id
+        SELECT p.*, r.name AS role_name, z.name AS zone_name
+        FROM people p
+        JOIN roles r ON r.id = p.role_id
+        LEFT JOIN zones z ON z.id = p.at_zone_id
         ORDER BY p.name
         """
     )

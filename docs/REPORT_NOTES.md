@@ -301,6 +301,54 @@ Test data (person "RainTest" and its embedding) deleted immediately after - this
 pipeline check, not real roster data. Real enrolment is Day 10, in the yard, in the actual
 shoot lighting, per REBUILD_PROMPT §10's own lesson.
 
+### Dashboard, 2026-09-03
+
+**Status: built and verified in a real browser at 1920x1080**, the resolution the shoot
+records at. `server/static/dashboard/index.html` - hand-written HTML/CSS/JS with no build
+step, deliberately: one fewer moving part to break the day before filming.
+
+Design choices, all of them reactions to specific faults found when auditing the previous
+build's console rather than taste:
+
+* Nothing smaller than 13px anywhere, and state is never carried by colour alone. The old
+  console put its most important text (operator action results, alert lines) at 10-12px grey
+  in a corner, which disappears entirely once a recording is scaled.
+* **Three node states that cannot be confused**: `live` (green), `armed · camera off`
+  (blue-grey), `offline` (red, plus a header banner naming the nodes). DEMO_ARCHITECTURE §6
+  is explicit that a sleeping camera must never look like a dead one - during this session a
+  real node genuinely dropped and the distinction read correctly at a glance.
+* **Six columns, not four**: the four zones plus `On site · zone unknown` (someone who has
+  entered but not yet been placed by a zone camera, which is the direct consequence of not
+  auto-placing entrants in Reception) plus `Off site`.
+* **Card movement animates via FLIP**, verified mechanically rather than by eye: moving a
+  person between columns applies an inverting transform of `translate(387.8px, 0)` - exactly
+  the measured gap between those two columns - before transitioning it away. The old board
+  replaced its innerHTML wholesale, so a person vanished from one column and appeared in
+  another between frames, and the zone-to-zone movement that is the video's central visual
+  was invisible as movement.
+* **Anomalies are large full-width cards** with an uppercase kind, the name and reason, and a
+  timestamp; tailgating is amber, everything else red. The old build's alerts were 12px
+  monospace lines identical in weight to routine traffic.
+* **Camera tiles are pinned to their node for life** (REBUILD_PROMPT §0.6.4) and served from
+  the brain's frame cache, so six open dashboards do not cost a node six times the requests.
+* **No native `alert()`/`confirm()` anywhere** - the old console used OS dialogs for
+  destructive actions, which show the page URL and sit outside the app's visual language on a
+  recording. `Reset take` is a two-click arm that disarms itself after 4 s, verified working.
+
+`POST /reset` deliberately does **not** wipe `audit_log`, unlike the old build's `/reset`
+which deleted the whole trail. A take reset clears live state only (presence, zones, tokens,
+and the in-memory gate/zone trackers, which would otherwise let a stale pending decision from
+the previous take bind to the first passage of the next one) and writes one audited line, so
+re-shoot boundaries are visible in a permanent record rather than erasing it. Verified: 5
+test people all flipped off-site with zones and tokens cleared, one `reset_take` row written
+by actor `operator`, and all 221 existing audit rows intact.
+
+One bug found and fixed during browser verification: `/people` was not returning the zone
+*name*, only the raw `at_zone_id`, so every on-site person landed in the "zone unknown"
+column regardless of where they actually were. Caught immediately by looking at the rendered
+board - the kind of thing no unit test would have flagged, because both halves were
+individually correct.
+
 ### Gate and zone decision logic, verified live end to end, 2026-09-03
 
 **Status: built.** `app/recognition/gate.py` and `app/recognition/zones.py` implement the

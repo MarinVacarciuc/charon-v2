@@ -93,6 +93,43 @@ once boards are spread across the yard per their mounting positions, which is
 what the camera-off-by-default design targets. The 1.5 s status timeout held
 under this worst case with zero failures, so it stands as measured.
 
+## v4.1-dashboard - 2026-09-03
+
+The dashboard - which DEMO_ARCHITECTURE calls the actual product, since the
+examiner watches a screen recording of it. Hand-written HTML/CSS/JS in
+server/static/dashboard/, no build step on purpose.
+
+Header (clock, on-site count, cameras live, alert count, offline banner), a
+six-node strip with three visually distinct states, a six-column zone board
+(four zones plus "on site, zone unknown" plus off-site) with FLIP-animated card
+movement, a loud full-width anomaly feed, six camera tiles each pinned to its
+own node for life, and a footer audit ticker with a two-click "Reset take".
+
+Backend additions to support it: static file mounting, a root redirect so a bare
+host lands on the product during filming, GET /audit, and POST /reset.
+
+POST /reset deliberately does NOT wipe audit_log, unlike the old build's /reset
+which deleted the entire trail. It clears live state only - presence, zones,
+tokens, and the in-memory gate/zone trackers, which would otherwise let a stale
+pending decision from the previous take bind to the first passage of the next -
+and writes one audited line, so a re-shoot boundary is visible in a permanent
+record instead of erasing it.
+
+Verified in a real browser at 1920x1080, the shoot's recording resolution, not
+just curl'd: the board distributes people into the right columns, FLIP applies a
+correctly-measured inverting transform when a card changes column (387.8px,
+exactly the gap between those columns), all four anomaly card kinds render at
+readable size with tailgating correctly amber, the two-click reset arms and
+disarms and fires the real POST, and the reset is reflected on the board and in
+the audit ticker within a second. A real node dropping offline mid-session
+confirmed the three-state node strip reads correctly at a glance.
+
+Found and fixed during that browser pass: /people returned only the raw
+at_zone_id and not the zone name, so every on-site person landed in the "zone
+unknown" column regardless of where they actually were. Both halves were
+individually correct, which is why no unit test caught it - only looking at the
+rendered board did.
+
 ## v3.2-decisions - 2026-09-03
 
 Gate and zone decision logic, wired end to end into the running brain.
