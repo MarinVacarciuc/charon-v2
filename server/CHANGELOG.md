@@ -45,6 +45,54 @@ Groundwork before any system code.
   made. Carries the measurements taken so far and an explicit list of numbers inherited from
   the old project that must be re-measured on this build rather than quoted second-hand.
 
+## Unreleased - 2026-09-03, fleet provisioning day
+
+All six boards flashed and identified by MAC via tools/provision_node.py, which
+refuses to guess an identity for a MAC it does not recognise. All six verified
+individually and then, for the first time, simultaneously on battery power on
+the demo hotspot: correct node id, correct MAC, camera pin map found, correct
+pass-sensor role for their position, joined the network.
+
+Found and fixed a real bug in the WiFi preferred-network logic added in
+v0-baseline: a board on a non-preferred network ran a full WiFi scan every 5
+seconds trying to find the preferred one, and scanning steals airtime from the
+current connection. Measured on gate-in while it sat on the fallback network:
+32% request failure rate, 857 ms median latency, spikes to 5.2 s, four
+consecutive failures at the run's end. Replaced the automatic periodic scan
+with an on-demand GET /rejoin the operator calls once during setup, after the
+hotspot is confirmed on, instead of an ambient poll that fights the radio
+forever. Not yet pushed to the boards (see below); dormant while all six sit
+on the preferred network, since the scanning branch only runs while connected
+to a fallback.
+
+Found, chased, and closed out (as a documented limitation, not a bug) a UDP
+problem: OTA firmware updates fail over the demo hotspot specifically. The
+handshake is UDP request/response on port 3232; every other path the brain
+depends on (/status, /shot.jpg, /threshold, /led, /wake) is plain HTTP over TCP
+and works reliably over the same hotspot. Ruled out: the Mac firewall (off),
+VPN interference (routing to the hotspot subnet is direct, no tunnel), and
+authentication (mDNS correctly advertises auth_upload=no). The remaining
+explanation is a known limitation of phone-based hotspots relaying
+client-to-client UDP. USB remains the fallback for any firmware push made on
+this hotspot; in-place threshold recalibration is unaffected, since it is
+ordinary HTTP. This is the exact hazard REBUILD_PROMPT flagged as unresolved
+("the demo hotspot SSID was never finalised") and DEMO_ARCHITECTURE called the
+single biggest risk to the shoot - now measured. Fixed ota_node.sh separately
+to pass the upload tool's required (but here unauthenticated) password field,
+and to explain the hotspot failure mode instead of a bare non-zero exit when
+it does fail there.
+
+Measured fleet-wide load for the first time: six boards clustered on a bench,
+all cameras awake simultaneously (each board's near sensor tripped by
+proximity to the others), contending for one hotspot's airtime. Zero request
+failures, but latency far less even than an isolated board (up to 2.1 s on one
+node, against 20-67 ms isolated) and die temperature elevated fleet-wide
+(65.5-80.6 C, against 63.6-66.6 C for one board cycling normally). This is a
+bench artifact from physical clustering, not the expected running condition
+once boards are spread across the yard per their mounting positions, which is
+what the camera-off-by-default design targets. The 1.5 s status timeout held
+under this worst case with zero failures, so it stands as measured.
+
 ## v1-firmware - in progress
 
 Node firmware v2. Written and compiling (37% flash, 19% RAM); not yet on hardware.

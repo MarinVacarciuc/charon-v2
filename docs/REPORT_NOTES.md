@@ -136,6 +136,68 @@ Presented as OFFLINE nodes rather than as slow ones, which is what made it expen
 diagnose the first time. `app/nodes/resolver.py` forces `AF_INET`, caches for 60 s, and
 connects by literal IP so no resolver runs on the request path at all.
 
+### Demo hotspot: peer-to-peer UDP does not pass, TCP does, 2026-09-03
+
+**Status: documented limitation, confirmed on the actual phone hotspot (`charon`).**
+
+Firmware OTA updates (`ota_node.sh`, `ArduinoOTA`) use a UDP request/response handshake on
+port 3232 before the actual image transfers over TCP. Over the demo hotspot, that UDP
+handshake gets no response from the board, every time, from both a freshly booted board and
+one that had been running for a while - ruling out stale state as the cause. Every other path
+the system depends on at runtime (`/status`, `/shot.jpg`, `/threshold`, `/led`, `/wake`) is
+plain HTTP over TCP and was confirmed working reliably over the same hotspot, to all six
+boards, in the same session.
+
+Ruled out before concluding this is the hotspot itself: the Mac's application firewall is
+disabled; routing to the 10.166.30.0/24 hotspot subnet goes directly over the WiFi interface
+with no VPN tunnel involved (checked via the routing table); ARP had already resolved all six
+boards' MAC addresses, confirming Layer 2 connectivity; and the `auth_upload=no` TXT record
+correctly advertised over mDNS, so authentication was not the blocker either.
+
+The remaining explanation is a known limitation of phone-based personal hotspots: many
+implement each connected device closer to a separate NAT client than a true bridged network,
+which tends to handle a straightforward client-initiated TCP flow (what HTTP polling is)
+far more reliably than a connectionless UDP request that has to be routed client-to-client
+through the phone rather than client-to-internet. `[CITE: mobile hotspot NAT / client
+isolation behaviour - a vendor or Android/iOS networking source, not yet identified]`
+
+*Practical consequence:* OTA firmware updates are not relied on for the demo hotspot. USB
+flashing, already proven on all six boards, is the fallback and remains the primary path for
+any firmware change made in the yard. This does **not** affect in-place recalibration
+(`/threshold?cm=&wake=`), which is plain HTTP and was exercised successfully on multiple
+boards. This is exactly the risk `REBUILD_PROMPT` §0.3 and `DEMO_ARCHITECTURE` §10 flagged as
+the single biggest hazard to the shoot ("the demo hotspot SSID was never finalised" /
+"this is the #1 risk to the shoot") - now measured rather than merely anticipated.
+
+### Fleet-wide load on the demo hotspot, 2026-09-03
+
+All six boards were live simultaneously for the first time, on battery power, on `charon`,
+with the Mac also on the hotspot. Six requests per round, five rounds, back to back:
+
+| Node | Median | Max | Failures |
+|---|---|---|---|
+| gate-in | 75 ms | 148 ms | 0/5 |
+| gate-out | 21 ms | 2144 ms | 0/5 |
+| zone-reception | 81 ms | 225 ms | 0/5 |
+| zone-warehouse | 296 ms | 867 ms | 0/5 |
+| zone-workshop | 619 ms | 1147 ms | 0/5 |
+| zone-server | 26 ms | 41 ms | 0/5 |
+
+Zero outright failures, but latency is markedly worse and far less even than a single board
+polled in isolation (20-67 ms, measured earlier the same day). Die temperature was also
+elevated across the fleet: 65.5-80.6 C, against the 63.6-66.6 C measured on one board cycling
+normally. Both effects trace to the same cause, confirmed by the near-sensor readings at the
+time (3.9-85.9 cm on every board): the boards were physically clustered on a bench, each
+one's near sensor was tripped by the others' proximity or general clutter, and all six
+cameras were awake and streaming simultaneously - six radios contending for airtime on one
+2.4 GHz channel, worst case, rather than the one-or-two-awake-at-a-time pattern the
+camera-off-by-default design targets. This is a real number worth keeping (LO4: it is the
+honest worst case for airtime contention), but it is a bench artifact, not the expected
+running condition once the boards are spread across the yard per their actual mounting
+positions - the fix is physical separation, which was always the plan, not a software change.
+The brain's 1.5 s status timeout was sized against the isolated-board measurement; it holds
+under this clustered worst case too (zero failures), so no change is needed on that evidence.
+
 ### Node polling and failure detection, 2026-09-03
 
 Measured against the live `gate-out` board and, for the failure case, against a LAN address

@@ -307,6 +307,44 @@ static void handleWake() {
               ",\"for_s\":" + sec + "}");
 }
 
+// Moves off the current network to the preferred one, if a scan finds it. Deliberately NOT
+// called from loop(): see the comment above its call site for why continuous scanning was
+// removed. Call this once during setup, after switching the hotspot on, not during a take.
+static bool scanRequested = false;
+static uint32_t scanStartedAt = 0;
+
+static void handleRejoin() {
+  noteBrainContact();
+  if (WiFi.SSID() == String(CHARON_APS[0].ssid)) {
+    server.send(200, "application/json", "{\"already_preferred\":true}");
+    return;
+  }
+  scanRequested = true;
+  scanStartedAt = millis();
+  WiFi.scanNetworks(true);
+  server.send(202, "application/json", "{\"scanning\":true}");
+}
+
+static void handleScanRequest() {
+  if (!scanRequested) return;
+  int n = WiFi.scanComplete();
+  if (n == WIFI_SCAN_RUNNING) {
+    if (millis() - scanStartedAt > 10000) { scanRequested = false; }  // give up, do not hang forever
+    return;
+  }
+  scanRequested = false;
+  if (n <= 0) return;
+  for (int i = 0; i < n; i++) {
+    if (WiFi.SSID(i) == String(CHARON_APS[0].ssid)) {
+      Serial.printf("[charon] preferred '%s' found, switching\n", CHARON_APS[0].ssid);
+      WiFi.disconnect();
+      WiFi.begin(CHARON_APS[0].ssid, CHARON_APS[0].pass);
+      break;
+    }
+  }
+  WiFi.scanDelete();
+}
+
 static void handleLed() {
   noteBrainContact();
   String st = server.arg("state");
@@ -458,6 +496,7 @@ void setup() {
   server.on("/wake",      handleWake);
   server.on("/threshold", handleThreshold);
   server.on("/led",       handleLed);
+  server.on("/rejoin",    handleRejoin);
   server.begin();
   Serial.println("[charon] ready");
 }
@@ -503,31 +542,15 @@ void loop() {
   if (camOn && (int32_t)(millis() - camIdleAt) >= 0) cameraSleep();
 
   // A node that silently loses wifi reads OFFLINE to the brain, so keep retrying - but
-  // retry the PREFERRED network first for the same reason it is preferred at boot.
-  // Without this, a node that briefly drops the hotspot settles onto the house network
-  // and never comes back, which looks identical to a dead board.
+  // retry the PREFERRED network first for the same reason it is preferred at boot. This is
+  // a plain reconnect attempt, not a scan: WiFi.begin() to a known SSID does not touch other
+  // channels, so it costs nothing to the current link when there is no link to lose.
   static uint32_t lastCheck = 0;
-  if (millis() - lastCheck > 5000) {
+  if (millis() - lastCheck > 5000 && WiFi.status() != WL_CONNECTED) {
     lastCheck = millis();
-    if (WiFi.status() != WL_CONNECTED) {
-      Serial.println("[charon] wifi lost, retrying preferred first");
-      WiFi.begin(CHARON_APS[0].ssid, CHARON_APS[0].pass);
-    } else if (CHARON_AP_COUNT > 1 && WiFi.SSID() != String(CHARON_APS[0].ssid)) {
-      // Connected, but to a fallback. If the preferred network has come back (the phone
-      // hotspot was switched on late), move to it rather than staying split from the brain.
-      int n = WiFi.scanComplete();
-      if (n == WIFI_SCAN_FAILED) { WiFi.scanNetworks(true); }
-      else if (n > 0) {
-        for (int i = 0; i < n; i++) {
-          if (WiFi.SSID(i) == String(CHARON_APS[0].ssid)) {
-            Serial.printf("[charon] preferred '%s' is back, switching\n", CHARON_APS[0].ssid);
-            WiFi.disconnect();
-            WiFi.begin(CHARON_APS[0].ssid, CHARON_APS[0].pass);
-            break;
-          }
-        }
-        WiFi.scanDelete();
-      }
-    }
+    Serial.println("[charon] wifi lost, retrying preferred first");
+    WiFi.begin(CHARON_APS[0].ssid, CHARON_APS[0].pass);
   }
+
+  handleScanRequest();
 }

@@ -22,8 +22,39 @@ sed -i '' "s|^#define NODE_ID .*|#define NODE_ID \"$NODE\"|" "$SEC"
 grep -q "#define NODE_ID \"$NODE\"" "$SEC" || { echo "failed to set NODE_ID in $SEC"; exit 1; }
 arduino-cli compile --fqbn "$FQBN" charon_node
 
-echo "==> pushing over wifi to $NODE.local (slower than USB - the whole image goes over the air)"
-arduino-cli upload -p "$NODE.local" -l network --fqbn "$FQBN" charon_node
+# arduino-cli finds network ports by IP, not by mDNS hostname, and its own port-discovery
+# has to run an mDNS query of its own to do that - separate from, and just as slow as, the
+# plain hostname lookup this project already works around elsewhere (see
+# app/nodes/resolver.py). The upload command's default discovery window is 1s, which is not
+# enough; resolve the IP ourselves first, then give discovery a real window to find it there.
+echo "==> resolving $NODE.local"
+IP="$(python3 -c "
+import socket
+try:
+    print(socket.getaddrinfo('$NODE.local', None, family=socket.AF_INET, type=socket.SOCK_STREAM)[0][4][0])
+except socket.gaierror:
+    pass
+")"
+[ -n "$IP" ] || { echo "$NODE.local did not resolve - is it powered and on the network?"; exit 1; }
+echo "    -> $IP"
+
+echo "==> pushing over wifi to $IP (slower than USB - the whole image goes over the air)"
+# -F password= (empty) is required even though OTA is unauthenticated: the esp_ota upload
+# tool's command template always includes an --auth= field, and arduino-cli refuses to run
+# non-interactively without a value for every field the template references.
+arduino-cli upload -p "$IP" -l network --fqbn "$FQBN" --discovery-timeout 10s -F password= charon_node
+UPLOAD_STATUS=$?
+
+if [ $UPLOAD_STATUS -ne 0 ]; then
+  echo
+  echo "OTA failed. Known cause on THIS project's demo hotspot (phone-based, SSID 'charon'):"
+  echo "the OTA handshake needs a UDP round trip (port 3232) before the image transfers over"
+  echo "TCP, and phone hotspots often do not relay client-to-client UDP even though ordinary"
+  echo "HTTP (TCP) works fine - confirmed 2026-09-03, see docs/REPORT_NOTES.md. If you are on"
+  echo "that hotspot, this is expected: use flash_node.sh over USB instead. If you are on a"
+  echo "normal router (home wifi), this is a real failure - investigate."
+  exit $UPLOAD_STATUS
+fi
 
 echo "==> done. Node reboots on its own once the image is written."
 echo "    verify:  curl http://$NODE.local/status"
