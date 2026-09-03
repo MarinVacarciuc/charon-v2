@@ -129,7 +129,7 @@ one every 8-90s with USB connected. The practical rule this sets: a board goes
 fully to battery before any real test, USB is for flashing only - which
 matters for how field recon days are run, not just as a curiosity.
 
-## v1-firmware - in progress
+## v1-firmware - 2026-09-03 (tagged retroactively same-day, on the commit where all six boards were confirmed)
 
 Node firmware v2. Written and compiling (37% flash, 19% RAM); not yet on hardware.
 
