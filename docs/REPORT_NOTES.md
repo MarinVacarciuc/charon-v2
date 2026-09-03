@@ -301,6 +301,102 @@ Test data (person "RainTest" and its embedding) deleted immediately after - this
 pipeline check, not real roster data. Real enrolment is Day 10, in the yard, in the actual
 shoot lighting, per REBUILD_PROMPT §10's own lesson.
 
+### Admin authentication (threat model A7), 2026-09-03
+
+**Status: built.** A7 sat at "partly implemented" for the entire life of the previous build:
+it had an audit trail and no authentication at all, so every destructive action - delete a
+person, revoke a token, wipe the database - was an unauthenticated GET that anything on the
+network could fire, including by being linked to.
+
+A shared secret in a header (`X-Charon-Admin`), guarding mutating routes only. The shape is
+the argument:
+
+* Reads stay open on the LAN. The gate terminal is a phone propped outdoors that nobody is
+  going to sign into mid-take; a login prompt there would be a fail-secure mechanism that
+  fails the shoot instead.
+* One secret, not accounts. There is one operator; per-user identity would be ceremony.
+* Header, not query string, so it stays out of server logs and browser history.
+* Compared with `hmac.compare_digest`, and an empty configured token logs a startup **warning**
+  rather than passing quietly - a system that is silently unprotected is worse than one that
+  is openly unprotected.
+
+Verified: every mutating route returns 401 with no token and with a wrong token, 200 with the
+right one; `/nodes`, `/people`, `/audit`, `/frame.jpg` and the dashboard all stay open.
+
+Honest scope, and the report should say it this way: this is a shared secret over plain HTTP
+on a private network. It stops an accident and a casual passer-by on the same LAN. It does not
+stop anyone who can see the traffic. TLS and per-user credentials remain designed-not-built.
+
+### Voice and phone notifications, 2026-09-03
+
+**Status: built.** 13 lines pre-rendered by `tools/make_voice.py` with macOS `say -v Daniel`
+(en_GB): a personal welcome per cast member, a denial per zone, and generic fallbacks so
+someone who joined the cast late is still spoken to rather than met with silence - a silent
+system on camera reads as a broken one. Verified as real audio (1.4 s and 2.1 s, 22 kHz
+mono) and played back.
+
+Nothing is synthesised at runtime. DEMO_ARCHITECTURE §7 asks for pre-generated calm lines with
+no live LLM and no runtime API; the practical argument is stronger than the aesthetic one,
+which is that the shoot then cannot be broken by a network hiccup or an expired key.
+
+Playback runs on one dedicated OS thread draining a queue. `afplay` blocks, so calling it from
+async code would stall every node's polling for the length of the line, and two lines started
+at once would talk over each other - which sounds broken on camera in a way a slightly late
+line does not. A line that has waited more than 6 s is dropped rather than played: "welcome"
+ten seconds after someone walked through is worse than nothing.
+
+Telegram reuses the existing `@CharonGBS_bot`, confirmed still live via `getMe`. The token was
+moved into `server/.env` (gitignored, and excluded from the OneDrive mirror). Sends are
+fire-and-forget: if Telegram is slow or down, the light still goes green, the voice still
+plays, the audit row is still written, and only the phone notification is missing.
+
+### Staff page and just-in-time grants, 2026-09-03
+
+**Status: built and verified end to end through the real UI.**
+
+The JIT panel only offers what a person *lacks* - a zone held permanently by their role shows
+"held permanently" with no controls at all. This was the strongest single idea in the previous
+build's console and is carried forward deliberately.
+
+The headline beat was verified as a policy outcome, not just a UI state. An IT-role person
+(role zones: Reception and Server room) was granted Workshop for 15 minutes through the page,
+and the policy layer then answered:
+
+| Zone | Now | In 20 minutes |
+|---|---|---|
+| Reception | ALLOW (role) | - |
+| Warehouse | DENY | - |
+| Workshop | **ALLOW (grant)** | **DENY - lapsed on its own** |
+| Server room | ALLOW (role) | - |
+
+That is the privilege-creep argument made concrete (threat model A4): there is no revert step
+for an admin to forget, because there is no revert step.
+
+Zone overrides in the editor say plainly that ticking anything replaces the role's zones *in
+both directions* - it is how you give someone less than their role, not only more. That
+direction is the authorisation gap the old build had, where an ADMIN could not be restricted at
+all. Ticks identical to the role's own zones are stored as "inherit" rather than as an
+override, so the distinction stays meaningful.
+
+Deletion was verified to cascade: a deleted person takes their embeddings, grants and zone
+overrides with them, which is the GDPR-relevant behaviour rather than an accident of schema.
+
+### Settings page, 2026-09-03
+
+**Status: built.** Every control carries a plain-language name *and* a sentence saying what it
+does and what changing it costs - the old console's cryptic toggles were a named complaint
+that had already been fixed once, and this is the thing not to regress on. Tuning values live
+in `config_kv`, so they survive a restart (REBUILD_PROMPT §0.6.6: an in-memory strictness flag
+that silently reverts is its own failure mode), and every change is audited with the full
+before/after set.
+
+Sensor thresholds are proxied through to the board's own NVS rather than stored centrally,
+because the node's copy has to keep working when the brain is not running - and because six
+boards on six walls must never need a USB cable to be recalibrated.
+
+Verified: a change saved through the page, appeared in `audit_log` with actor `admin`, and
+survived a full restart.
+
 ### Dashboard, 2026-09-03
 
 **Status: built and verified in a real browser at 1920x1080**, the resolution the shoot

@@ -1,0 +1,184 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Charon · settings</title>
+<style>
+:root{--bg:#0b0e14;--panel:#141922;--panel2:#1b2230;--line:#28313f;--ink:#e8eef7;
+      --ink-dim:#93a1b5;--ink-faint:#5f6d80;--accent:#37c8d4;--ok:#3ddc84;--warn:#ffb02e;--bad:#ff5c5c}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%}
+body{background:var(--bg);color:var(--ink);font:15px/1.45 system-ui,-apple-system,sans-serif;
+     display:flex;flex-direction:column;overflow:hidden}
+header{display:flex;align-items:center;gap:20px;padding:13px 22px;border-bottom:1px solid var(--line);background:var(--panel)}
+.brand{font-size:20px;font-weight:700}.brand span{color:var(--accent)}
+nav{margin-left:auto;display:flex;gap:8px}
+nav a{color:var(--ink-dim);text-decoration:none;padding:7px 13px;border-radius:7px;border:1px solid transparent;font-weight:600;font-size:14px}
+nav a:hover{border-color:var(--line);color:var(--ink)}
+nav a.on{background:var(--panel2);border-color:var(--line);color:var(--ink)}
+main{flex:1;overflow-y:auto;padding:18px 22px;max-width:1100px;width:100%}
+h2{font-size:12px;letter-spacing:.11em;text-transform:uppercase;color:var(--ink-faint);margin:22px 0 10px}
+h2:first-child{margin-top:0}
+.setting{display:grid;grid-template-columns:1fr 190px;gap:16px;align-items:center;
+         padding:13px 15px;border:1px solid var(--line);border-radius:9px;background:var(--panel);margin-bottom:9px}
+.setting .name{font-weight:650;font-size:15px}
+/* Every control says, in plain words, what it does and what changing it costs. The previous
+   console's cryptic single-letter toggles were a named complaint, fixed once already; this
+   is the thing not to regress on. */
+.setting .why{font-size:13px;color:var(--ink-dim);margin-top:3px;line-height:1.4}
+.setting .ctl{display:flex;gap:8px;align-items:center;justify-content:flex-end}
+input,select{font:inherit;background:var(--panel2);color:var(--ink);border:1px solid var(--line);
+             border-radius:6px;padding:7px 9px;width:100%}
+input[type=checkbox]{width:20px;height:20px;accent-color:var(--accent)}
+button{font:inherit;font-weight:600;padding:8px 14px;border-radius:7px;cursor:pointer;
+       background:var(--panel2);color:var(--ink);border:1px solid var(--line)}
+button:hover{border-color:var(--accent)}
+button.primary{background:rgba(55,200,212,.16);border-color:rgba(55,200,212,.5)}
+.node{display:grid;grid-template-columns:150px 1fr 1fr auto;gap:12px;align-items:end;
+      padding:12px 15px;border:1px solid var(--line);border-radius:9px;background:var(--panel);margin-bottom:9px}
+.node .id{font-weight:650}
+.node .state{font-size:11px;text-transform:uppercase;letter-spacing:.07em;margin-top:3px}
+.state.live{color:var(--ok)}.state.armed{color:var(--ink-faint)}.state.offline{color:var(--bad)}
+label{display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--ink-dim)}
+.bar{position:sticky;bottom:0;display:flex;gap:10px;align-items:center;padding:12px 0 4px;background:linear-gradient(0deg,var(--bg) 70%,transparent)}
+.msg{padding:8px 12px;border-radius:7px;font-size:14px;display:none}
+.msg.on{display:block}
+.msg.ok{background:rgba(61,220,132,.14);border:1px solid rgba(61,220,132,.4)}
+.msg.err{background:rgba(255,92,92,.14);border:1px solid rgba(255,92,92,.4)}
+</style>
+
+<header>
+  <div class="brand">CHARON<span> · settings</span></div>
+  <nav>
+    <a href="/dashboard/">Dashboard</a><a href="/staff/">Staff</a>
+    <a href="/settings/" class="on">Settings</a><a href="/gate/?node=gate-in">Gate terminal</a>
+  </nav>
+</header>
+
+<main>
+  <h2>Recognition</h2>
+  <div id="recognition"></div>
+  <h2>Alerting</h2>
+  <div id="alerting"></div>
+  <h2>Cameras and sensors</h2>
+  <div id="nodes"></div>
+  <div class="bar">
+    <button class="primary" id="save">Save settings</button>
+    <div class="msg" id="msg"></div>
+  </div>
+</main>
+
+<script>
+const TOKEN_KEY = "charon.admin";
+function adminToken(force){
+  let t = force ? null : localStorage.getItem(TOKEN_KEY);
+  if(!t){ t = prompt("Admin token (from server/.env)") || ""; if(t) localStorage.setItem(TOKEN_KEY,t); }
+  return t;
+}
+async function adminFetch(url, opts){
+  opts = opts || {};
+  opts.headers = Object.assign({"Content-Type":"application/json"}, opts.headers,
+                               {"X-Charon-Admin": adminToken(false)});
+  let r = await fetch(url, opts);
+  if(r.status === 401){ opts.headers["X-Charon-Admin"] = adminToken(true); r = await fetch(url, opts); }
+  return r;
+}
+
+// key -> [group, label, plain-language explanation, input type]
+const SETTINGS = {
+  sim_threshold:  ["recognition","Face match threshold",
+    "How similar a face must be to an enrolled sample before the system will name someone. Higher is stricter: fewer wrong names, more people left as unrecognised. 0.45 was tuned on these exact cameras.","number"],
+  sim_margin:     ["recognition","Margin over the runner-up",
+    "How far ahead the best match must be of the second-best person. Stops a coin-flip between two similar faces being reported as a confident identification.","number"],
+  confirm_frames: ["recognition","Frames that must agree",
+    "How many consecutive frames must show the same person before the system commits to that identity. Higher is calmer and slower; this is what stops a name flickering frame to frame.","number"],
+  dwell_ms:       ["recognition","Dwell before a zone change (ms)",
+    "How long someone must be seen in a zone before the board moves them there. Stops a person walking past a camera from flickering through zones they never entered.","number"],
+  gate_bind_window_s: ["recognition","Gate decision validity (s)",
+    "How long a gate decision stays claimable by a physical passage. Someone recognised and then walking through within this window is recorded as that person; longer than this and the passage is logged as unidentified.","number"],
+  unknown_zone_throttle_s: ["alerting","Unknown-face alert gap (s)",
+    "Minimum time between 'unknown person in a zone' alerts from the same camera, so someone lingering does not flood the feed.","number"],
+  wrong_zone_throttle_s:   ["alerting","Wrong-zone alert gap (s)",
+    "Minimum time between repeat alerts about the same person in the same forbidden zone.","number"],
+  overstay_grace_min:      ["alerting","Overstay grace (min)",
+    "How long past someone's shift end or maximum stay before they are flagged as overstaying.","number"],
+  voice_enabled:    ["alerting","Speak decisions aloud",
+    "Plays the pre-recorded line for grants, denials and zone violations through the laptop. Lines are generated ahead of time; nothing is synthesised or fetched while running.","bool"],
+  telegram_enabled: ["alerting","Send phone notifications",
+    "Sends the entry token and wrong-zone warnings to a person's Telegram, if their chat id is set on their staff record.","bool"],
+};
+
+let config = {}, nodes = [];
+const $ = id => document.getElementById(id);
+
+function say(text, ok){
+  const el = $("msg"); el.className = "msg on " + (ok?"ok":"err"); el.textContent = text;
+  setTimeout(()=>{ el.className = "msg"; }, 4000);
+}
+
+function renderSettings(){
+  for(const group of ["recognition","alerting"]){
+    $(group).innerHTML = Object.entries(SETTINGS).filter(([,v])=>v[0]===group).map(([key,[,label,why,type]])=>{
+      const v = config[key] ?? "";
+      const ctl = type === "bool"
+        ? `<input type="checkbox" data-key="${key}" ${v==="1"?"checked":""}>`
+        : `<input type="number" step="any" data-key="${key}" value="${v}">`;
+      return `<div class="setting"><div><div class="name">${label}</div><div class="why">${why}</div></div>
+              <div class="ctl">${ctl}</div></div>`;
+    }).join("");
+  }
+}
+
+function renderNodes(){
+  $("nodes").innerHTML = nodes.map(n=>`
+    <div class="node">
+      <div><div class="id">${n.id}</div><div class="state ${n.state}">${n.state==="armed"?"armed · camera off":n.state}</div></div>
+      <label>Wake distance (cm)
+        <input type="number" data-wake="${n.id}" placeholder="${n.near_cm>0?Math.round(n.near_cm)+" cm now":"--"}"></label>
+      <label>${n.role.startsWith("gate")?"Passage distance (cm)":"Passage sensor (not fitted)"}
+        <input type="number" data-pass="${n.id}" ${n.role.startsWith("gate")?"":"disabled"}></label>
+      <div style="display:flex;gap:8px">
+        <button data-rot="${n.id}">Rotate ${n.rotation_deg}&deg;</button>
+        <button data-thr="${n.id}">Apply</button>
+      </div>
+    </div>`).join("");
+
+  document.querySelectorAll("[data-rot]").forEach(b=>b.onclick = async ()=>{
+    const id = b.dataset.rot, cur = (nodes.find(n=>n.id===id)||{}).rotation_deg||0;
+    const r = await adminFetch(`/nodes/${id}/rotation?deg=${(cur+90)%360}`, {method:"POST"});
+    say(r.ok?`${id} rotated.`:"Rotation failed.", r.ok); await load();
+  });
+  document.querySelectorAll("[data-thr]").forEach(b=>b.onclick = async ()=>{
+    const id = b.dataset.thr;
+    const wake = document.querySelector(`[data-wake="${id}"]`).value;
+    const pass = document.querySelector(`[data-pass="${id}"]`).value;
+    const q = [];
+    if(wake) q.push("wake="+wake);
+    if(pass) q.push("pass_cm="+pass);
+    if(!q.length) return say("Enter a distance first.", false);
+    const r = await adminFetch(`/nodes/${id}/threshold?`+q.join("&"), {method:"POST"});
+    const j = await r.json();
+    say(r.ok?`${id}: wake<${j.wake_cm}cm, passage<${j.pass_thresh_cm}cm (stored on the board).`
+            :(j.error||"The node did not accept it."), r.ok);
+    await load();
+  });
+}
+
+async function load(){
+  config = (await (await fetch("/config")).json()).config;
+  nodes  = (await (await fetch("/nodes")).json()).nodes;
+  renderSettings(); renderNodes();
+}
+
+$("save").onclick = async () => {
+  const body = {};
+  document.querySelectorAll("[data-key]").forEach(el=>{
+    body[el.dataset.key] = el.type === "checkbox" ? (el.checked?"1":"0") : el.value;
+  });
+  const r = await adminFetch("/config", {method:"POST", body: JSON.stringify(body)});
+  say(r.ok ? "Saved. These values survive a restart." : "Save failed.", r.ok);
+  await load();
+};
+
+load();
+setInterval(load, 10000);
+</script>

@@ -9,11 +9,15 @@ from __future__ import annotations
 import asyncio
 import logging
 
-from fastapi import APIRouter, Request
+import aiohttp
+
+from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 
+from ..db.database import utcnow
 from ..push.events import keepalive
 from ..push.hub import SseHub
+from .auth import require_admin
 
 log = logging.getLogger(__name__)
 
@@ -92,7 +96,7 @@ async def events(request: Request):
                              headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
-@router.post("/nodes/{node_id}/rotation")
+@router.post("/nodes/{node_id}/rotation", dependencies=[Depends(require_admin)])
 async def set_rotation(request: Request, node_id: str, deg: int):
     """Set one node's frame rotation. Per node, never global - six cameras get mounted six
     ways (REBUILD_PROMPT §0.6.9). Written to the database so it survives a restart, and
@@ -113,3 +117,42 @@ async def set_rotation(request: Request, node_id: str, deg: int):
     # look like the setting had not taken.
     live.last_frame = None
     return {"node": node_id, "rotation_deg": deg}
+
+
+@router.post("/nodes/{node_id}/threshold", dependencies=[Depends(require_admin)])
+async def set_threshold(request: Request, node_id: str, wake: int | None = None, pass_cm: int | None = None):
+    """Recalibrate a node's ultrasonic thresholds in place, over the network.
+
+    Proxied to the board rather than stored here: the node's NVS copy is authoritative, since
+    it has to keep working when the brain is not running. This exists because six boards on
+    six walls must never need a USB cable to be re-calibrated - and because a threshold set on
+    a cluttered desk does not survive contact with the real mounting spot (measured: readings
+    swinging 33-233 cm from multipath, REBUILD_PROMPT §0.6.2).
+    """
+    live = request.app.state.registry.get(node_id)
+    if live is None:
+        return JSONResponse({"error": f"unknown node '{node_id}'"}, status_code=404)
+    params = []
+    if wake is not None:
+        params.append(f"wake={wake}")
+    if pass_cm is not None:
+        params.append(f"cm={pass_cm}")
+    if not params:
+        return JSONResponse({"error": "give wake= and/or pass_cm="}, status_code=400)
+
+    ip = await request.app.state.registry._resolver.resolve(live.hostname)
+    if ip is None:
+        return JSONResponse({"error": f"{live.hostname} did not resolve"}, status_code=503)
+    url = f"http://{ip}/threshold?" + "&".join(params)
+    try:
+        async with request.app.state.session.get(url, timeout=aiohttp.ClientTimeout(total=5)) as r:
+            body = await r.json(content_type=None)
+    except Exception as exc:  # noqa: BLE001
+        return JSONResponse({"error": f"node did not accept the change: {exc}"}, status_code=502)
+
+    # Mirror what the board reports back into our readable cache, so the UI shows what the
+    # hardware actually holds rather than what we hoped it would take.
+    await request.app.state.db.execute(
+        "UPDATE nodes SET wake_cm = ?, pass_cm = ?, thresholds_synced_at = ? WHERE id = ?",
+        (body.get("wake_cm"), body.get("pass_thresh_cm"), utcnow(), node_id))
+    return {"node": node_id, **body}

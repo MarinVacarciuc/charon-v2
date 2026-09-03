@@ -1,0 +1,121 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Charon gate</title>
+<style>
+/* The screen propped at the gate. Since the LEDs on GPIO 1/2 were deliberately not soldered,
+   this IS the physical green light in the video, so it is built to be readable at a distance
+   and unmistakable on camera: one state, filling the screen, nothing else competing.
+
+   Read-only by design - no admin token, no login. A terminal that needs signing in mid-take
+   is a fail-secure mechanism that fails the shoot. */
+:root{ --ink:#fff; }
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;overflow:hidden;background:#000}
+body{
+  font:600 16px/1.2 system-ui,-apple-system,"Segoe UI",sans-serif; color:var(--ink);
+  display:flex; align-items:center; justify-content:center; text-align:center;
+  transition:background .18s ease;
+  -webkit-user-select:none; user-select:none;
+}
+body.idle    {background:#0b0e14}
+body.granted {background:#0b6b34}
+body.denied  {background:#7d1420}
+body.failsafe{background:#0b6b34}
+body.failsec {background:#5a1520}
+
+.wrap{padding:4vh 4vw; width:100%}
+.state{
+  font-size:min(19vw,230px); font-weight:800; line-height:.95; letter-spacing:-.02em;
+  text-transform:uppercase;
+}
+.who{margin-top:2.2vh; font-size:min(8vw,86px); font-weight:700}
+.sub{margin-top:2.4vh; font-size:min(3.6vw,34px); font-weight:500; opacity:.82}
+.node{
+  position:fixed; top:12px; left:16px; font-size:13px; letter-spacing:.14em;
+  text-transform:uppercase; opacity:.55; font-weight:700;
+}
+.link{position:fixed; bottom:10px; right:14px; font-size:12px; opacity:.4}
+.pulse{animation:pulse 1.6s ease-in-out infinite}
+@keyframes pulse{0%,100%{opacity:.5} 50%{opacity:1}}
+</style>
+
+<div class="node" id="node">gate</div>
+<div class="wrap">
+  <div class="state" id="state">READY</div>
+  <div class="who" id="who"></div>
+  <div class="sub" id="sub">waiting for someone to approach</div>
+</div>
+<div class="link" id="conn"></div>
+
+<script>
+// Which lane this screen belongs to. A terminal is bolted to ONE gate, so it never guesses -
+// same rule as the dashboard's camera tiles (REBUILD_PROMPT §0.6.4).
+const NODE = new URLSearchParams(location.search).get("node") || "gate-in";
+document.getElementById("node").textContent = NODE;
+
+const body = document.body, elState = $("state"), elWho = $("who"), elSub = $("sub"), elConn = $("conn");
+function $(id){ return document.getElementById(id); }
+
+let clearTimer = null, brainOk = true, nodeOk = true;
+
+function show(cls, state, who, sub, holdMs){
+  clearTimeout(clearTimer);
+  body.className = cls;
+  elState.textContent = state;
+  elWho.textContent = who || "";
+  elSub.textContent = sub || "";
+  if(holdMs) clearTimer = setTimeout(idle, holdMs);
+}
+function idle(){
+  // Degraded states outrank idle: if the system is down, the screen must keep saying so.
+  if(!brainOk || !nodeOk) return degraded();
+  show("idle", "READY", "", "waiting for someone to approach");
+}
+function degraded(){
+  // Fail-safe on the way out, fail-secure on the way in (REBUILD_PROMPT B2): nobody is ever
+  // trapped inside, and nobody is auto-admitted by a system that cannot vouch for them.
+  if(NODE === "gate-out"){
+    show("failsafe", "EXIT FREE", "", "Gate offline. You may leave. Your passage is logged.");
+  }else{
+    show("failsec", "SEE GUARD", "", "Gate offline. Entry cannot be authorised right now.");
+  }
+}
+
+async function pollHealth(){
+  try{
+    const r = await fetch("/nodes", {cache:"no-store"});
+    const n = (await r.json()).nodes.find(x => x.id === NODE);
+    brainOk = true;
+    nodeOk = !!n && n.online;
+    elConn.textContent = nodeOk ? "" : NODE + " offline";
+  }catch(e){
+    brainOk = false;                    // the brain itself is unreachable
+    elConn.textContent = "brain unreachable";
+  }
+  if((!brainOk || !nodeOk) && !body.className.startsWith("fail")) degraded();
+  else if(brainOk && nodeOk && body.className.startsWith("fail")) idle();
+}
+
+function connect(){
+  const es = new EventSource("/events");
+  es.onmessage = e => {
+    let d; try{ d = JSON.parse(e.data); }catch(_){ return; }
+    if(d.type !== "alert" || d.node !== NODE) return;
+    if(d.kind === "gate_decision"){
+      const who = (d.message || "").split(":")[0];
+      if(d.granted) show("granted", "GRANTED", who, "Welcome.", 6000);
+      else          show("denied",  "DENIED",  who, "Access is not authorised.", 6000);
+    }else if(d.kind === "unidentified_passage"){
+      show("denied", "UNKNOWN", "", "Unrecognised passage.", 5000);
+    }else if(d.kind === "denied_crossed"){
+      show("denied", "DENIED", (d.message||"").split(":")[0], "Passage recorded without authorisation.", 6000);
+    }
+  };
+}
+
+idle();
+pollHealth();
+setInterval(pollHealth, 2000);
+connect();
+</script>

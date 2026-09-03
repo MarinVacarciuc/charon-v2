@@ -8,10 +8,11 @@ from __future__ import annotations
 
 import cv2
 import numpy as np
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
 
-from ..db.repositories import embeddings, people
+from ..db.repositories import audit, embeddings, people
+from .auth import require_admin
 from ..recognition.engine import is_confident_match
 
 router = APIRouter(prefix="/people")
@@ -33,7 +34,7 @@ async def list_people(request: Request):
     ]}
 
 
-@router.post("/enroll")
+@router.post("/enroll", dependencies=[Depends(require_admin)])
 async def enroll(request: Request, name: str, role: str, node: str):
     """Capture one sample from the named node's current frame and attach it to `name`,
     creating the person if they do not already exist. A repeat call for the same name adds
@@ -84,7 +85,7 @@ async def enroll(request: Request, name: str, role: str, node: str):
             "face_score": float(faces[0][14])}
 
 
-@router.delete("/{person_id}/samples")
+@router.delete("/{person_id}/samples", dependencies=[Depends(require_admin)])
 async def clear_samples(request: Request, person_id: int):
     """Wipe a person's face templates without deleting their record - the recovery path for
     a bad enrolment session, ported from the old build's /reface."""
@@ -138,3 +139,77 @@ async def recognise_debug(request: Request, node: str):
             "confident": is_confident_match(c, threshold=threshold, margin=margin_cfg),
         })
     return {"node": node, "faces": out, "enrolled_people": engine.enrolled_people}
+
+
+@router.get("/roster")
+async def roster(request: Request):
+    """The roster as the staff page needs it: role, effective access, live JIT grants and
+    sample count in one call, so the page never has to join anything client-side."""
+    db = request.app.state.db
+    engine = request.app.state.engine
+    rows = await people.list_all(db)
+    zones = [r["name"] for r in await db.fetch_all("SELECT name FROM zones ORDER BY sort_order")]
+    roles = [r["name"] for r in await db.fetch_all("SELECT name FROM roles ORDER BY id")]
+
+    out = []
+    for r in rows:
+        overrides = await db.fetch_all(
+            "SELECT z.name FROM person_zone_overrides o JOIN zones z ON z.id = o.zone_id "
+            "WHERE o.person_id = ?", (r["id"],))
+        role_zones = await people.load_role_zones(db, r["role_name"])
+        out.append({
+            **{k: v for k, v in r.items() if k != "session_token"},
+            "samples": engine.sample_count(r["id"]),
+            "zone_overrides": [o["name"] for o in overrides],
+            "role_zones": sorted(role_zones),
+            "grants": await people.live_grants(db, r["id"]),
+        })
+    return {"people": out, "zones": zones, "roles": roles}
+
+
+@router.post("/{person_id}", dependencies=[Depends(require_admin)])
+async def update_person(request: Request, person_id: int):
+    body = await request.json()
+    db = request.app.state.db
+    try:
+        await people.update(db, person_id, body.get("fields", {}))
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+    if "zone_overrides" in body:
+        await people.set_zone_overrides(db, person_id, body["zone_overrides"])
+    return {"ok": True, "person_id": person_id}
+
+
+@router.delete("/{person_id}", dependencies=[Depends(require_admin)])
+async def delete_person(request: Request, person_id: int):
+    await people.delete(request.app.state.db, person_id)
+    # Their embeddings cascaded with them; drop the in-memory copy too, or a deleted person
+    # keeps being recognised until the next restart.
+    roster = await embeddings.load_all(request.app.state.db)
+    request.app.state.engine.load_samples(roster)
+    return {"ok": True}
+
+
+@router.post("/{person_id}/grant", dependencies=[Depends(require_admin)])
+async def grant(request: Request, person_id: int, zone: str, minutes: int = 15):
+    """Just-in-time zone pass - DEMO_ARCHITECTURE calls this a headline beat, not an extra.
+    It lapses on its own; there is no revert step for an admin to forget (threat model A4)."""
+    if minutes < 1 or minutes > 24 * 60:
+        return JSONResponse({"error": "minutes must be between 1 and 1440"}, status_code=400)
+    db = request.app.state.db
+    expires = await people.grant_zone(db, person_id, zone, minutes)
+    p = await people.get_by_id(db, person_id)
+    await audit.record(db, "grant", f"{p['name'] if p else person_id}: {zone} granted for {minutes} min "
+                                    f"(until {expires})", actor="admin", person_id=person_id)
+    return {"ok": True, "zone": zone, "expires_at": expires}
+
+
+@router.delete("/{person_id}/grant", dependencies=[Depends(require_admin)])
+async def ungrant(request: Request, person_id: int, zone: str | None = None):
+    db = request.app.state.db
+    await people.revoke_zone(db, person_id, zone)
+    p = await people.get_by_id(db, person_id)
+    await audit.record(db, "ungrant", f"{p['name'] if p else person_id}: "
+                                      f"{zone or 'all temporary access'} revoked",
+                       actor="admin", person_id=person_id)
+    return {"ok": True}

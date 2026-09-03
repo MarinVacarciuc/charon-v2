@@ -32,7 +32,7 @@ rsync -a --delete --delete-excluded \
   \
   `# --- biometric / personal data (GDPR Art. 9) ---` \
   --exclude 'server/data/' \
-  --exclude '**/staff/' --exclude '**/staff_db/' \
+  --exclude 'prototype/staff/' --exclude 'charon-spikes/staff/' --exclude '**/staff_db/' \
   --exclude '**/faces/' --exclude '**/known_faces/' --exclude '**/enrolled/' \
   --exclude '**/captures/' \
   --exclude '*.npy' --exclude '*.embeddings' --exclude '*.dat' \

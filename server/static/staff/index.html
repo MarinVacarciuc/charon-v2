@@ -1,0 +1,321 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Charon · staff</title>
+<style>
+:root{
+  --bg:#0b0e14; --panel:#141922; --panel2:#1b2230; --line:#28313f;
+  --ink:#e8eef7; --ink-dim:#93a1b5; --ink-faint:#5f6d80;
+  --accent:#37c8d4; --ok:#3ddc84; --warn:#ffb02e; --bad:#ff5c5c;
+}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%}
+body{background:var(--bg);color:var(--ink);font:15px/1.45 system-ui,-apple-system,sans-serif;
+     display:flex;flex-direction:column;overflow:hidden}
+header{display:flex;align-items:center;gap:20px;padding:13px 22px;border-bottom:1px solid var(--line);background:var(--panel)}
+.brand{font-size:20px;font-weight:700}.brand span{color:var(--accent)}
+nav{margin-left:auto;display:flex;gap:8px}
+nav a{color:var(--ink-dim);text-decoration:none;padding:7px 13px;border-radius:7px;border:1px solid transparent;font-weight:600;font-size:14px}
+nav a:hover{border-color:var(--line);color:var(--ink)}
+nav a.on{background:var(--panel2);border-color:var(--line);color:var(--ink)}
+
+main{flex:1;display:grid;grid-template-columns:330px 1fr;gap:16px;padding:16px 22px;min-height:0}
+.pane{background:var(--panel);border:1px solid var(--line);border-radius:10px;display:flex;flex-direction:column;min-height:0}
+.pane > h2{margin:0;padding:12px 15px;border-bottom:1px solid var(--line);font-size:12px;
+           letter-spacing:.11em;text-transform:uppercase;color:var(--ink-faint)}
+.pane > h2 button{float:right;margin-top:-4px}
+.scroll{overflow-y:auto;padding:11px;display:flex;flex-direction:column;gap:8px}
+
+.person{padding:10px 12px;border:1px solid var(--line);border-radius:8px;background:var(--panel2);cursor:pointer}
+.person:hover{border-color:var(--accent)}
+.person.sel{border-color:var(--accent);background:rgba(55,200,212,.10)}
+.person .nm{font-weight:650;font-size:15px}
+.person .rl{font-size:12px;color:var(--ink-dim);margin-top:2px}
+.pill{display:inline-block;font-size:10px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;
+      padding:2px 6px;border-radius:4px;margin-left:6px}
+.pill.in{background:rgba(61,220,132,.18);color:var(--ok)}
+.pill.susp{background:rgba(255,92,92,.18);color:var(--bad)}
+.pill.nosamples{background:rgba(255,176,46,.18);color:var(--warn)}
+
+.detail{padding:16px 18px;overflow-y:auto}
+.detail h3{margin:0 0 4px;font-size:22px}
+.detail .sub{color:var(--ink-dim);font-size:13px;margin-bottom:16px}
+fieldset{border:1px solid var(--line);border-radius:9px;padding:13px 15px;margin:0 0 14px}
+legend{padding:0 7px;font-size:11px;letter-spacing:.11em;text-transform:uppercase;color:var(--ink-faint)}
+.row{display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end;margin-bottom:10px}
+label{display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--ink-dim)}
+label .hint{font-size:11px;color:var(--ink-faint);max-width:340px;line-height:1.35}
+input,select{font:inherit;background:var(--panel2);color:var(--ink);border:1px solid var(--line);
+             border-radius:6px;padding:7px 9px;min-width:120px}
+input[type=checkbox]{min-width:auto;width:16px;height:16px;accent-color:var(--accent)}
+button{font:inherit;font-weight:600;padding:8px 14px;border-radius:7px;cursor:pointer;
+       background:var(--panel2);color:var(--ink);border:1px solid var(--line)}
+button:hover{border-color:var(--accent)}
+button.primary{background:rgba(55,200,212,.16);border-color:rgba(55,200,212,.5)}
+button.danger{background:rgba(255,92,92,.14);border-color:rgba(255,92,92,.45);color:#ffd7d7}
+button.small{padding:5px 10px;font-size:13px}
+.zones{display:flex;gap:14px;flex-wrap:wrap}
+.zbox{display:flex;align-items:center;gap:6px;font-size:14px;color:var(--ink)}
+.grant{display:flex;align-items:center;gap:10px;padding:8px 10px;border:1px solid var(--line);
+       border-radius:7px;background:var(--panel2);margin-bottom:7px}
+.grant .z{font-weight:650;min-width:110px}
+.grant .left{color:var(--warn);font-size:13px;font-variant-numeric:tabular-nums}
+.grant .perm{color:var(--ok);font-size:13px}
+.msg{padding:9px 12px;border-radius:7px;margin-bottom:12px;font-size:14px;display:none}
+.msg.on{display:block}
+.msg.ok{background:rgba(61,220,132,.14);border:1px solid rgba(61,220,132,.4)}
+.msg.err{background:rgba(255,92,92,.14);border:1px solid rgba(255,92,92,.4)}
+.empty{color:var(--ink-faint);font-size:14px;padding:20px 2px}
+</style>
+
+<header>
+  <div class="brand">CHARON<span> · staff</span></div>
+  <nav>
+    <a href="/dashboard/">Dashboard</a>
+    <a href="/staff/" class="on">Staff</a>
+    <a href="/settings/">Settings</a>
+    <a href="/gate/?node=gate-in">Gate terminal</a>
+  </nav>
+</header>
+
+<main>
+  <section class="pane">
+    <h2>Roster <button class="small" id="new">+ enrol</button></h2>
+    <div class="scroll" id="list"></div>
+  </section>
+  <section class="pane">
+    <h2 id="detail-title">Select someone</h2>
+    <div class="detail" id="detail"><div class="empty">Pick a person on the left, or enrol someone new.</div></div>
+  </section>
+</main>
+
+<script>
+const TOKEN_KEY = "charon.admin";
+function adminToken(force){
+  let t = force ? null : localStorage.getItem(TOKEN_KEY);
+  if(!t){ t = prompt("Admin token (from server/.env)") || ""; if(t) localStorage.setItem(TOKEN_KEY,t); }
+  return t;
+}
+async function adminFetch(url, opts){
+  opts = opts || {};
+  opts.headers = Object.assign({"Content-Type":"application/json"}, opts.headers,
+                               {"X-Charon-Admin": adminToken(false)});
+  let r = await fetch(url, opts);
+  if(r.status === 401){
+    opts.headers["X-Charon-Admin"] = adminToken(true);
+    r = await fetch(url, opts);
+  }
+  return r;
+}
+
+let data = {people:[], zones:[], roles:[]}, nodes = [], selected = null;
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+
+function say(text, ok){
+  const el = $("msg"); if(!el) return;
+  el.className = "msg on " + (ok ? "ok" : "err");
+  el.textContent = text;
+  setTimeout(()=>{ el.className = "msg"; }, 4000);
+}
+function minsLeft(iso){
+  const ms = new Date(iso.replace(" ","T") + "Z") - new Date();
+  return Math.max(0, Math.round(ms/60000));
+}
+
+async function load(){
+  data = await (await fetch("/people/roster")).json();
+  nodes = (await (await fetch("/nodes")).json()).nodes;
+  renderList();
+  if(selected != null){
+    const p = data.people.find(x=>x.id===selected);
+    p ? renderDetail(p) : (selected=null, renderNew());
+  }
+}
+
+function renderList(){
+  if(!data.people.length){ $("list").innerHTML = '<div class="empty">Nobody enrolled yet.</div>'; return; }
+  $("list").innerHTML = data.people.map(p=>`
+    <div class="person ${p.id===selected?"sel":""}" data-id="${p.id}">
+      <div class="nm">${esc(p.name)}
+        ${p.presence==="in"?'<span class="pill in">on site</span>':""}
+        ${p.status==="suspended"?'<span class="pill susp">suspended</span>':""}
+        ${p.samples===0?'<span class="pill nosamples">no face</span>':""}
+      </div>
+      <div class="rl">${esc(p.role_name)} · ${p.samples} sample${p.samples===1?"":"s"}</div>
+    </div>`).join("");
+  document.querySelectorAll(".person").forEach(el=>{
+    el.onclick = () => { selected = +el.dataset.id; renderDetail(data.people.find(p=>p.id===selected)); renderList(); };
+  });
+}
+
+/* ---------- enrol ---------- */
+function renderNew(){
+  $("detail-title").textContent = "Enrol someone";
+  const cams = nodes.map(n=>`<option value="${n.id}" ${n.state!=="live"?"disabled":""}>${n.id}${n.state!=="live"?" ("+n.state+")":""}</option>`).join("");
+  $("detail").innerHTML = `
+    <div class="msg" id="msg"></div>
+    <h3>New person</h3>
+    <div class="sub">A capture is taken from the camera you choose, right now. Enrol several
+      angles and lightings by capturing more than once - each capture adds a sample.</div>
+    <fieldset><legend>Identity</legend>
+      <div class="row">
+        <label>Name<input id="f-name" placeholder="as it should read on the board"></label>
+        <label>Role<select id="f-role">${data.roles.map(r=>`<option>${r}</option>`).join("")}</select></label>
+      </div>
+    </fieldset>
+    <fieldset><legend>Capture</legend>
+      <div class="row">
+        <label>Camera to capture from
+          <select id="f-node">${cams}</select>
+          <span class="hint">Named explicitly on purpose: capturing from "whichever camera
+            sees a face" once enrolled the wrong person under someone else's access rights.</span>
+        </label>
+        <button class="primary" id="do-enrol">Capture and enrol</button>
+      </div>
+    </fieldset>`;
+  $("do-enrol").onclick = async () => {
+    const name = $("f-name").value.trim(), role = $("f-role").value, node = $("f-node").value;
+    if(!name) return say("A name is required.", false);
+    const r = await adminFetch(`/people/enroll?name=${encodeURIComponent(name)}&role=${role}&node=${node}`, {method:"POST"});
+    const j = await r.json();
+    if(!r.ok) return say(j.error || "Enrolment failed.", false);
+    say(`Captured. ${j.name} now has ${j.samples} sample(s).`, true);
+    selected = j.person_id;
+    await load();
+  };
+}
+
+/* ---------- detail ---------- */
+function renderDetail(p){
+  if(!p) return renderNew();
+  $("detail-title").textContent = p.name;
+  const effective = p.zone_overrides.length ? p.zone_overrides : p.role_zones;
+  const grantRows = data.zones.map(z=>{
+    const held = effective.includes(z);
+    const live = p.grants.find(g=>g.zone===z);
+    if(held) return `<div class="grant"><span class="z">${z}</span><span class="perm">held permanently</span></div>`;
+    if(live) return `<div class="grant"><span class="z">${z}</span>
+        <span class="left">${minsLeft(live.expires_at)} min left</span>
+        <button class="small danger" data-ungrant="${z}">Revoke</button></div>`;
+    return `<div class="grant"><span class="z">${z}</span>
+        <input type="number" min="1" max="1440" value="15" style="min-width:80px" data-mins="${z}">
+        <span style="color:var(--ink-faint);font-size:13px">minutes</span>
+        <button class="small" data-grant="${z}">Grant</button></div>`;
+  }).join("");
+
+  $("detail").innerHTML = `
+    <div class="msg" id="msg"></div>
+    <h3>${esc(p.name)}</h3>
+    <div class="sub">${esc(p.role_name)} · ${p.samples} face sample${p.samples===1?"":"s"} ·
+      ${p.presence==="in" ? "on site" + (p.zone_name?" in "+esc(p.zone_name):", zone unknown") : "off site"}</div>
+
+    <fieldset><legend>Permanent access</legend>
+      <div class="row">
+        <label>Role<select id="e-role">${data.roles.map(r=>`<option ${r===p.role_name?"selected":""}>${r}</option>`).join("")}</select></label>
+        <label>Status<select id="e-status">
+          <option ${p.status==="active"?"selected":""}>active</option>
+          <option ${p.status==="suspended"?"selected":""}>suspended</option></select></label>
+        <label>Telegram chat id<input id="e-chat" value="${esc(p.telegram_chat_id)}" placeholder="for tokens and alerts"></label>
+      </div>
+      <div class="row">
+        <label>Allowed from<input id="e-from" type="time" value="${p.hours_from}"></label>
+        <label>Allowed until<input id="e-to" type="time" value="${p.hours_to}"></label>
+        <label>Valid until<input id="e-valid" type="date" value="${p.valid_until||""}">
+          <span class="hint">Blank means no expiry. A window whose end is before its start
+            crosses midnight and is handled as such.</span></label>
+      </div>
+      <div class="row">
+        <label style="width:100%">Zones
+          <div class="zones">${data.zones.map(z=>`
+            <span class="zbox"><input type="checkbox" data-zone="${z}"
+              ${(p.zone_overrides.length ? p.zone_overrides : p.role_zones).includes(z)?"checked":""}> ${z}</span>`).join("")}</div>
+          <span class="hint">Ticking anything here replaces the role's zones entirely, in both
+            directions - it is how you give someone LESS than their role, not only more.
+            Untick everything to go back to inheriting the role.</span></label>
+      </div>
+      <div class="row"><button class="primary" id="save">Save</button></div>
+    </fieldset>
+
+    <fieldset><legend>Just-in-time access</legend>
+      <div class="sub" style="margin-bottom:10px">Temporary passes lapse on their own. There is
+        nothing to revert and nothing to forget.</div>
+      ${grantRows}
+      <div class="row" style="margin-top:10px">
+        <button class="small danger" id="ungrant-all">Clear all temporary access</button></div>
+    </fieldset>
+
+    <fieldset><legend>Face samples</legend>
+      <div class="row">
+        <label>Add a sample from
+          <select id="add-node">${nodes.map(n=>`<option value="${n.id}" ${n.state!=="live"?"disabled":""}>${n.id}${n.state!=="live"?" ("+n.state+")":""}</option>`).join("")}</select></label>
+        <button id="add-sample">Capture another</button>
+        <button class="danger" id="clear-samples">Clear all samples</button>
+      </div>
+    </fieldset>
+
+    <fieldset><legend>Remove</legend>
+      <div class="row"><button class="danger" id="del">Delete ${esc(p.name)}</button>
+      <span class="hint">Deletes the person and their face data together.</span></div>
+    </fieldset>`;
+
+  $("save").onclick = async () => {
+    const ticked = [...document.querySelectorAll("[data-zone]")].filter(c=>c.checked).map(c=>c.dataset.zone);
+    const roleZones = p.role_zones.slice().sort().join(",");
+    // Ticks identical to the role's own zones mean "inherit", not "override with the same list".
+    const overrides = ticked.slice().sort().join(",") === roleZones ? [] : ticked;
+    const r = await adminFetch(`/people/${p.id}`, {method:"POST", body: JSON.stringify({
+      fields:{ role:$("e-role").value, status:$("e-status").value, telegram_chat_id:$("e-chat").value,
+               hours_from:$("e-from").value, hours_to:$("e-to").value, valid_until:$("e-valid").value },
+      zone_overrides: overrides })});
+    say(r.ok ? "Saved." : "Save failed.", r.ok); await load();
+  };
+  document.querySelectorAll("[data-grant]").forEach(b=>{
+    b.onclick = async () => {
+      const z = b.dataset.grant;
+      const mins = document.querySelector(`[data-mins="${z}"]`).value;
+      const r = await adminFetch(`/people/${p.id}/grant?zone=${encodeURIComponent(z)}&minutes=${mins}`, {method:"POST"});
+      say(r.ok ? `${z} granted for ${mins} minutes.` : "Grant failed.", r.ok); await load();
+    };
+  });
+  document.querySelectorAll("[data-ungrant]").forEach(b=>{
+    b.onclick = async () => {
+      const r = await adminFetch(`/people/${p.id}/grant?zone=${encodeURIComponent(b.dataset.ungrant)}`, {method:"DELETE"});
+      say(r.ok ? "Revoked." : "Revoke failed.", r.ok); await load();
+    };
+  });
+  $("ungrant-all").onclick = async () => {
+    const r = await adminFetch(`/people/${p.id}/grant`, {method:"DELETE"});
+    say(r.ok ? "All temporary access cleared." : "Failed.", r.ok); await load();
+  };
+  $("add-sample").onclick = async () => {
+    const r = await adminFetch(`/people/enroll?name=${encodeURIComponent(p.name)}&role=${p.role_name}&node=${$("add-node").value}`, {method:"POST"});
+    const j = await r.json();
+    say(r.ok ? `Captured. ${j.samples} sample(s) now.` : (j.error||"Capture failed."), r.ok); await load();
+  };
+  $("clear-samples").onclick = confirmTwice("clear-samples", "Clear all samples", async () => {
+    const r = await adminFetch(`/people/${p.id}/samples`, {method:"DELETE"});
+    say(r.ok ? "Samples cleared." : "Failed.", r.ok); await load();
+  });
+  $("del").onclick = confirmTwice("del", `Delete ${p.name}`, async () => {
+    const r = await adminFetch(`/people/${p.id}`, {method:"DELETE"});
+    say(r.ok ? "Deleted." : "Failed.", r.ok); selected = null; await load(); renderNew();
+  });
+}
+
+// Two-click arming instead of a native confirm(): an OS dialog shows the page URL and sits
+// outside the app's visual language, which reads badly on a recording.
+function confirmTwice(id, label, action){
+  let armed = false, t = null;
+  return () => {
+    const b = $(id);
+    if(!armed){ armed = true; b.classList.add("danger"); b.textContent = "Click again to confirm";
+                t = setTimeout(()=>{ armed=false; b.textContent=label; }, 4000); return; }
+    clearTimeout(t); armed = false; b.textContent = label; action();
+  };
+}
+
+$("new").onclick = () => { selected = null; renderList(); renderNew(); };
+load().then(renderNew);
+setInterval(load, 15000);   // keeps "minutes left" on live grants honest
+</script>

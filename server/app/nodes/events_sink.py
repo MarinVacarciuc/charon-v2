@@ -19,6 +19,8 @@ import numpy as np
 from ..db.database import Database, utcnow
 from ..db.repositories import audit, people, presence
 from ..push import events as ev
+from ..alerts.telegram import Telegram
+from ..alerts.voice import VoicePlayer
 from ..push.hub import SseHub
 from ..recognition import gate, policy, zones
 from ..recognition.engine import RecognitionEngine, is_confident_match
@@ -39,10 +41,13 @@ def _now() -> dt.datetime:
 
 
 class BrainEvents:
-    def __init__(self, db: Database, hub: SseHub, engine: RecognitionEngine) -> None:
+    def __init__(self, db: Database, hub: SseHub, engine: RecognitionEngine,
+                 voice: VoicePlayer | None = None, telegram: Telegram | None = None) -> None:
         self._db = db
         self._hub = hub
         self._engine = engine
+        self._voice = voice
+        self._tg = telegram
         self._gate_states: dict[str, gate.GateNodeState] = {}
         self._zone_states: dict[str, zones.ZoneNodeState] = {}
         # Last frame's face-count per node, for the tailgating check at passage time - a
@@ -163,6 +168,13 @@ class BrainEvents:
             )
             await self._hub.publish(ev.alert("gate_decision", f"{name}: {'granted' if e.granted else 'denied'}",
                                              node=node.node_id, person_id=e.person_id, granted=e.granted))
+            # Beat 1: the spoken line lands on the DECISION, not on the passage, so the voice,
+            # the green light and the phone all happen together as the person walks up.
+            if self._voice and node.direction == "in":
+                if e.granted:
+                    self._voice.welcome(name)
+                else:
+                    self._voice.denied()
 
         elif e.kind == "entry":
             token, was_already_in = await presence.commit_entry(self._db, e.person_id)
@@ -171,6 +183,8 @@ class BrainEvents:
             await audit.record(self._db, "entry", f"{name} entered via {node.node_id} (token {token})",
                                node_id=node.node_id, person_id=e.person_id)
             await self._hub.publish(ev.passage(node.node_id, "in", 0))
+            if self._tg and p and p.get("telegram_chat_id"):
+                self._tg.entry_token(p["telegram_chat_id"], name, token)
             if was_already_in:
                 await audit.record(self._db, "concurrent_entry", f"{name} entered while already on-site",
                                    severity="alert", node_id=node.node_id, person_id=e.person_id)
@@ -255,9 +269,17 @@ class BrainEvents:
                                severity="alert", node_id=node.node_id, person_id=e.person_id)
             await self._hub.publish(ev.alert("wrong_zone", f"{name}: not allowed in {e.zone}",
                                              node=node.node_id, zone=e.zone))
+            # Beat 5 is deliberately loud on all three surfaces at once: the board, the
+            # person's own phone, and the room.
+            if self._voice:
+                self._voice.denied_zone(e.zone)
+            if self._tg and p and p.get("telegram_chat_id"):
+                self._tg.wrong_zone(p["telegram_chat_id"], name, e.zone, e.reason)
 
         elif e.kind == "unknown_in_zone":
             await audit.record(self._db, "unknown_in_zone", f"unknown person in {e.zone}",
                                severity="alert", node_id=node.node_id)
             await self._hub.publish(ev.alert("unknown_in_zone", f"unknown person in {e.zone}",
                                              node=node.node_id, zone=e.zone))
+            if self._voice:
+                self._voice.unknown_in_zone()

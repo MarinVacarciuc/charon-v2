@@ -93,6 +93,54 @@ once boards are spread across the yard per their mounting positions, which is
 what the camera-off-by-default design targets. The 1.5 s status timeout held
 under this worst case with zero failures, so it stands as measured.
 
+## v4.2-ui - 2026-09-03
+
+Admin auth, voice, Telegram, and the three remaining operator surfaces.
+
+**Admin auth closes threat model A7**, which sat at "partly implemented" for the
+whole life of the previous build - it had an audit trail and no authentication,
+so every destructive action was an unauthenticated GET. A shared secret in a
+header guards mutating routes; reads stay open, because the gate terminal is a
+phone propped outdoors and a login prompt there is a fail-secure mechanism that
+fails the shoot. Constant-time compare, and an empty token logs a startup
+warning rather than passing quietly. Verified: 401 with no token and with a
+wrong one, 200 with the right one, reads unaffected.
+
+**Voice**: 13 lines pre-rendered by tools/make_voice.py with macOS `say -v
+Daniel`, including generic fallbacks so a late addition to the cast is still
+spoken to rather than met with silence. Playback is one dedicated thread
+draining a queue - afplay blocks, so calling it inline would stall every node's
+polling, and two lines at once talk over each other. A line older than 6s is
+dropped: "welcome" ten seconds late is worse than nothing.
+
+**Telegram** reuses the existing @CharonGBS_bot (confirmed live), with the token
+moved into the gitignored .env. Fire-and-forget: if Telegram is down, the light
+still goes green, the voice still plays, the audit row is still written.
+
+**Gate terminal** (/gate/?node=): full-screen GRANTED/DENIED with the person's
+name - this IS the physical green light in the video, since the LEDs on GPIO 1/2
+were deliberately not soldered. Fail-safe on the exit lane ("EXIT FREE"),
+fail-secure on the entry lane ("SEE GUARD") when the node or brain is
+unreachable, per REBUILD_PROMPT B2: nobody trapped inside, nobody auto-admitted
+by a system that cannot vouch for them. Both branches verified.
+
+**Staff page**: enrolment naming its camera explicitly, access editing, and JIT
+grants. The grant panel only offers zones a person lacks - the strongest idea in
+the old console, carried forward. Verified as a policy outcome, not just a UI
+state: IT granted Workshop for 15 minutes reads ALLOW now and DENY in 20
+minutes, with no revert step to forget (threat model A4). Zone overrides state
+plainly that they replace the role's zones in both directions, which is the
+authorisation gap the old build had. Deletion cascades embeddings, grants and
+overrides - verified, since that is the GDPR-relevant behaviour.
+
+**Settings page**: every control has a plain-language name and a sentence on
+what it does and what changing it costs, which was a named complaint about the
+old console. Values live in config_kv so they survive a restart; changes are
+audited with the full set. Sensor thresholds proxy through to the board's own
+NVS, because that copy has to work when the brain does not.
+
+Full suite still green: 62 unit tests plus 2 integration smoke tests.
+
 ## v4.1-dashboard - 2026-09-03
 
 The dashboard - which DEMO_ARCHITECTURE calls the actual product, since the

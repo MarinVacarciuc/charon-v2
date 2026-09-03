@@ -18,7 +18,11 @@ server/data/
 **/known_faces/
 **/enrolled/
 **/staff_db/
-**/staff/
+# NOT a blanket "any directory named staff": that rule silently swallowed
+# server/static/staff/index.html, a source file, and a negation cannot rescue it because git
+# does not descend into an excluded directory. Name the data directories exactly instead.
+prototype/staff/
+charon-spikes/staff/
 **/captures/
 *.embeddings
 *.npy

@@ -144,3 +144,106 @@ async def load_role_zones(db: Database, role_name: str) -> set[str]:
         (role_name,),
     )
     return {r["name"] for r in rows}
+
+
+# ------------------------------------------------------------------ editing and grants
+
+EDITABLE = ("role", "telegram_chat_id", "hours_from", "hours_to",
+            "valid_until", "access_until", "max_hours", "status", "is_dispatcher")
+
+
+async def update(db: Database, person_id: int, fields: dict) -> None:
+    """Apply an allow-listed set of edits.
+
+    The allow-list is the point: `presence`, `session_token`, `entry_time` and `at_zone_id`
+    are system-managed and must never be settable through an edit form, or an operator could
+    hand someone a session by typing one in. Same discipline as the previous build's FIELDS
+    split, kept deliberately.
+    """
+    sets, params = [], []
+    for key, value in fields.items():
+        if key not in EDITABLE:
+            continue
+        if key == "role":
+            role_id = await get_role_id(db, value)
+            if role_id is None:
+                raise ValueError(f"unknown role '{value}'")
+            sets.append("role_id = ?")
+            params.append(role_id)
+        else:
+            sets.append(f"{key} = ?")
+            params.append(value)
+    if not sets:
+        return
+    sets.append("updated_at = ?")
+    params.append(utcnow())
+    params.append(person_id)
+    await db.execute(f"UPDATE people SET {', '.join(sets)} WHERE id = ?", params)
+
+
+async def set_zone_overrides(db: Database, person_id: int, zone_names: list[str]) -> None:
+    """Replace this person's zone overrides wholesale.
+
+    An empty list means "inherit the role" - which is NOT the same as "no zones", and the
+    difference matters: policy.permanent_zones() treats a non-empty override set as a full
+    replacement in both directions, so an override list that narrows is how you restrict
+    someone below their role (the authorisation gap the old build had, where an ADMIN could
+    not be restricted at all).
+    """
+    statements: list[tuple[str, tuple]] = [
+        ("DELETE FROM person_zone_overrides WHERE person_id = ?", (person_id,))
+    ]
+    for name in zone_names:
+        statements.append((
+            "INSERT INTO person_zone_overrides (person_id, zone_id) "
+            "SELECT ?, id FROM zones WHERE name = ?",
+            (person_id, name),
+        ))
+    await db.execute_many(statements)
+
+
+async def delete(db: Database, person_id: int) -> None:
+    # Embeddings and overrides and grants all cascade (ON DELETE CASCADE), so the biometric
+    # data goes with the person - which is the GDPR-relevant behaviour, not an accident.
+    await db.execute("DELETE FROM people WHERE id = ?", (person_id,))
+
+
+async def grant_zone(db: Database, person_id: int, zone_name: str, minutes: int,
+                     granted_by: str = "admin") -> str:
+    """Issue (or replace) a just-in-time pass for one zone. Returns the expiry timestamp.
+
+    Each zone carries its own expiry and lapses on its own - there is no revert step to
+    forget, which is the whole privilege-creep argument (threat model A4). Replacing an
+    existing live grant rather than stacking keeps "how long is left" unambiguous.
+    """
+    from datetime import datetime, timedelta, timezone
+    expires = (datetime.now(timezone.utc) + timedelta(minutes=minutes)).strftime("%Y-%m-%d %H:%M:%S")
+    await db.execute_many([
+        ("UPDATE zone_grants SET revoked_at = ? WHERE person_id = ? AND revoked_at IS NULL "
+         "AND zone_id = (SELECT id FROM zones WHERE name = ?)", (utcnow(), person_id, zone_name)),
+        ("INSERT INTO zone_grants (person_id, zone_id, expires_at, granted_by, granted_at) "
+         "SELECT ?, id, ?, ?, ? FROM zones WHERE name = ?",
+         (person_id, expires, granted_by, utcnow(), zone_name)),
+    ])
+    return expires
+
+
+async def revoke_zone(db: Database, person_id: int, zone_name: str | None) -> None:
+    """Revoke one zone's grant, or every live grant when zone_name is None."""
+    if zone_name is None:
+        await db.execute(
+            "UPDATE zone_grants SET revoked_at = ? WHERE person_id = ? AND revoked_at IS NULL",
+            (utcnow(), person_id))
+    else:
+        await db.execute(
+            "UPDATE zone_grants SET revoked_at = ? WHERE person_id = ? AND revoked_at IS NULL "
+            "AND zone_id = (SELECT id FROM zones WHERE name = ?)",
+            (utcnow(), person_id, zone_name))
+
+
+async def live_grants(db: Database, person_id: int) -> list[dict]:
+    rows = await db.fetch_all(
+        "SELECT z.name AS zone, g.expires_at FROM zone_grants g JOIN zones z ON z.id = g.zone_id "
+        "WHERE g.person_id = ? AND g.revoked_at IS NULL ORDER BY g.expires_at",
+        (person_id,))
+    return [dict(r) for r in rows]

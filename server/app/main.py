@@ -13,9 +13,11 @@ from fastapi import FastAPI
 from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
-from .api import routes_admin, routes_nodes, routes_people
+from .api import auth, routes_admin, routes_nodes, routes_people
 from .config import SERVER_DIR, get_settings
 from .db.database import Database
+from .alerts.telegram import Telegram
+from .alerts.voice import VoicePlayer
 from .db.repositories import embeddings
 from .recognition.engine import RecognitionEngine
 from .nodes.events_sink import BrainEvents
@@ -50,7 +52,9 @@ def create_app() -> FastAPI:
 
         session = aiohttp.ClientSession()
         hub = SseHub()
-        events = BrainEvents(db, hub, engine)
+        voice = VoicePlayer(settings.voice_dir)
+        telegram = Telegram(settings.tg_token, session)
+        events = BrainEvents(db, hub, engine, voice=voice, telegram=telegram)
         registry = NodeRegistry(db, session, events)
         await registry.load()
         await registry.start()
@@ -63,6 +67,13 @@ def create_app() -> FastAPI:
         app.state.registry = registry
         app.state.events = events
         log.info("brain up: %d node(s) polling, db at %s", len(registry.all()), settings.db_path)
+        if settings.admin_token:
+            log.info("admin auth: ON (mutating routes require the %s header)", auth.HEADER)
+        else:
+            # Unprotected has to be a state you can SEE. A system that is silently open is
+            # worse than one that is openly open.
+            log.warning("admin auth: OFF - CHARON_ADMIN_TOKEN is empty, so every mutating "
+                        "route is unauthenticated. Fine on a bench, not for a real run.")
 
     @app.on_event("shutdown")
     async def shutdown() -> None:

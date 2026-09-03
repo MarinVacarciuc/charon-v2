@@ -179,6 +179,34 @@ button.arm{background:rgba(255,92,92,.18); border-color:rgba(255,92,92,.55); col
 </footer>
 
 <script>
+
+/* ---------------- admin token ----------------
+   Mutating routes need a shared secret (threat model A7). Asked for once, kept in
+   localStorage, sent in a header rather than a query string so it stays out of server logs
+   and browser history. Read-only routes never need it, so the board and the tiles keep
+   working untouched even if the token is wrong or absent. */
+const TOKEN_KEY = "charon.admin";
+function adminToken(force){
+  let t = force ? null : localStorage.getItem(TOKEN_KEY);
+  if(!t){
+    t = prompt("Admin token (from server/.env)") || "";
+    if(t) localStorage.setItem(TOKEN_KEY, t);
+  }
+  return t;
+}
+async function adminFetch(url, opts){
+  opts = opts || {};
+  opts.headers = Object.assign({}, opts.headers, {"X-Charon-Admin": adminToken(false)});
+  let r = await fetch(url, opts);
+  if(r.status === 401){
+    // Wrong or stale token: ask once more, then give up rather than looping.
+    opts.headers["X-Charon-Admin"] = adminToken(true);
+    r = await fetch(url, opts);
+    if(r.status === 401) alert("Admin token rejected.");
+  }
+  return r;
+}
+
 const NODES = [
   {id:"gate-in",        label:"ENTRY · gate-in"},
   {id:"gate-out",       label:"EXIT · gate-out"},
@@ -245,7 +273,7 @@ function buildTiles(){
       const id = btn.dataset.node;
       const cur = (nodes.find(n=>n.id===id) || {}).rotation_deg || 0;
       const next = (cur + 90) % 360;
-      await fetch(`/nodes/${id}/rotation?deg=${next}`, {method:"POST"});
+      await adminFetch(`/nodes/${id}/rotation?deg=${next}`, {method:"POST"});
       loadNodes();
     };
   });
@@ -398,7 +426,7 @@ $("#reset").onclick = async () => {
   }
   clearTimeout(armTimer); armed = false;
   b.classList.remove("arm"); b.textContent = "Reset take";
-  await fetch("/reset", {method:"POST"});
+  await adminFetch("/reset", {method:"POST"});
 };
 
 buildTiles();
