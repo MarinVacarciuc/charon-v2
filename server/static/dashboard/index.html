@@ -114,6 +114,14 @@ main{flex:1; display:grid; grid-template-columns:62fr 38fr; gap:14px; padding:14
   font-size:11px; font-weight:700; letter-spacing:.06em; text-transform:uppercase;
   background:linear-gradient(0deg,rgba(0,0,0,.85),transparent); color:#fff;
 }
+.tile .rot{
+  position:absolute; top:6px; right:6px; z-index:2;
+  width:26px; height:26px; line-height:24px; text-align:center; padding:0;
+  font-size:15px; border-radius:6px; opacity:0; transition:opacity .15s;
+  background:rgba(0,0,0,.6); border:1px solid rgba(255,255,255,.25); color:#fff;
+}
+.tile:hover .rot{opacity:1}
+.tile .rot b{position:absolute; left:0; right:0; bottom:-14px; font-size:9px; color:var(--ink-faint); font-weight:600}
 .tile .ph{
   position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
   flex-direction:column; gap:4px; font-size:11px; letter-spacing:.09em; text-transform:uppercase;
@@ -227,8 +235,20 @@ function buildTiles(){
     <div class="tile offline" id="tile-${n.id}">
       <img id="img-${n.id}" alt="">
       <div class="ph"><span id="ph-${n.id}">offline</span></div>
+      <button class="rot" data-node="${n.id}" title="Rotate this camera 90&deg;">&#8635;</button>
       <div class="lbl">${n.label}</div>
     </div>`).join("");
+  // Orientation is a property of how THIS camera was mounted, so it is corrected on the tile
+  // where the problem is visible, and only for that node (REBUILD_PROMPT §0.6.9).
+  document.querySelectorAll(".rot").forEach(btn=>{
+    btn.onclick = async () => {
+      const id = btn.dataset.node;
+      const cur = (nodes.find(n=>n.id===id) || {}).rotation_deg || 0;
+      const next = (cur + 90) % 360;
+      await fetch(`/nodes/${id}/rotation?deg=${next}`, {method:"POST"});
+      loadNodes();
+    };
+  });
   NODES.forEach(n=>pump(n.id));
 }
 // One chained request per tile, and each tile is pinned to its own node for life: the old

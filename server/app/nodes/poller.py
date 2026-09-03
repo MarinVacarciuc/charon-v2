@@ -27,6 +27,7 @@ from typing import Any, Awaitable, Callable, Protocol
 
 import aiohttp
 
+from .frames import rotate_jpeg
 from .resolver import Ipv4Resolver
 from .state import NodeLive
 
@@ -193,6 +194,9 @@ class NodePoller:
         try:
             code, _headers, jpeg = await self._get(ip, "/shot.jpg", FRAME_TIMEOUT_S)
             if code == 200 and jpeg[:2] == b"\xff\xd8":
+                # Correct orientation here, once, so everything downstream - recognition and
+                # every dashboard tile alike - works from an upright frame. See frames.py.
+                jpeg = rotate_jpeg(jpeg, self.live.rotation_deg)
                 self.live.last_frame = jpeg
                 self.live.last_frame_at = time.monotonic()
                 await self._events.frame(self.live, jpeg)
