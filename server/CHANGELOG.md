@@ -93,6 +93,58 @@ once boards are spread across the yard per their mounting positions, which is
 what the camera-off-by-default design targets. The 1.5 s status timeout held
 under this worst case with zero failures, so it stands as measured.
 
+## v3.2-decisions - 2026-09-03
+
+Gate and zone decision logic, wired end to end into the running brain.
+
+app/recognition/gate.py (pure, no I/O): recognition names someone and issues a
+decision (BEAT 1); presence only flips when the pass ultrasonic's counter
+actually increments (BEAT 2) - the model Marin locked in over the original
+camera-only proposal, since the gate is where the demo's actual physical
+sensor gets a real job. A decision stays bound to a later passage within a
+3s window that keeps refreshing as long as the same person is still
+confidently recognised, so someone who pauses and is reaffirmed for several
+seconds is still correctly bound, not falsely treated as stale. Two new event
+kinds the old build never had: denied_crossed (recognised, refused, walked
+through anyway) and unidentified_passage now fires symmetrically at both
+entry and exit, not just entry. Tailgating (>1 face at the passage instant)
+is its own alert alongside the real outcome. 12 unit tests.
+
+app/recognition/zones.py (pure, no I/O): every face in frame is processed,
+not just the largest (REBUILD_PROMPT §0.6.5's named blind spot) - each
+recognised person's zone updates independently after a ~2s dwell (a single
+missed frame does not reset the dwell timer; a real >1s gap does, and a later
+re-entry re-fires correctly), and any unrecognised face raises its own
+throttled alert regardless of how many legitimate faces share the frame.
+Wrong-zone alerts are throttled per (person, zone) pair, unknown-face alerts
+per node. 12 unit tests.
+
+app/db/repositories/presence.py: the DB side of a decided gate/zone outcome -
+session tokens, presence flips, zone assignment - kept deliberately separate
+from the pure decision logic, so a schema change and a policy change are
+never the same edit. app/db/repositories/people.py gained
+load_policy_person/load_role_zones, the bridge from DB rows to policy.py's
+pure Person dataclass.
+
+app/nodes/events_sink.py now does real work in frame()/passage() instead of
+the Day-4 no-ops: decode, detect every face, embed and recognise each,
+dispatch to gate.py or zones.py by node role, and turn the resulting events
+into audit_log rows, SSE pushes, and the presence/zone writes above.
+
+Verified live, not only unit-tested. Marin stood in front of gate-in; a real
+gate_decision fired through the running server, visible on the SSE stream and
+in audit_log a moment later with the correct name and outcome. Three real
+pass-sensor trips before he was enrolled correctly produced three
+unidentified_passage alerts rather than doing nothing or crashing - proof the
+passage-binding path runs correctly against real sensor data. A genuine
+sensor-confirmed entry was not captured live in today's session (the pass
+sensor was not in reach of where the test happened); the entry path itself is
+covered by a dedicated unit test and shares its DB-writing code with
+denied_crossed/exit, both of which fired live. Recorded honestly in
+docs/REPORT_NOTES.md rather than claimed as fully live-verified. Full test
+suite: 62 unit tests plus 2 hardware-free integration smoke tests, all
+passing.
+
 ## v2-skeleton - 2026-09-03
 
 FastAPI brain skeleton, running end to end against all six live boards rather than

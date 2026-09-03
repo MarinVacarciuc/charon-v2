@@ -47,7 +47,7 @@ def create_app() -> FastAPI:
 
         session = aiohttp.ClientSession()
         hub = SseHub()
-        events = BrainEvents(db, hub)
+        events = BrainEvents(db, hub, engine)
         registry = NodeRegistry(db, session, events)
         await registry.load()
         await registry.start()

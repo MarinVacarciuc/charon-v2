@@ -301,6 +301,43 @@ Test data (person "RainTest" and its embedding) deleted immediately after - this
 pipeline check, not real roster data. Real enrolment is Day 10, in the yard, in the actual
 shoot lighting, per REBUILD_PROMPT §10's own lesson.
 
+### Gate and zone decision logic, verified live end to end, 2026-09-03
+
+**Status: built.** `app/recognition/gate.py` and `app/recognition/zones.py` implement the
+gate model Marin locked in over DEMO_ARCHITECTURE's original camera-only proposal: recognition
+names someone and issues a decision (BEAT 1 - green/red, and where the decision is bound for
+a passage to claim), but presence only flips when the PASS ultrasonic's counter actually
+increments (BEAT 2). Both modules are pure functions - no database, no camera - and carry 24
+unit tests between them, several of which are regressions of gaps the previous build had:
+
+* **Denied but crossed anyway** never had an event at all in the old build; here it is its own
+  alert (`denied_crossed`), distinct from a clean `entry`.
+* **A passage with no fresh decision to bind to** ("unidentified passage") was only ever
+  logged at ENTER in the old build and silently ignored at EXIT. Both directions now raise it.
+* **Tailgating** (more than one face at the moment of passage) is flagged as its own alert
+  alongside whatever the primary outcome was, not folded into it.
+* Zone logic processes **every** face in frame, not just the largest - REBUILD_PROMPT §0.6.5's
+  named blind spot. A second known person and a stranger sharing one frame both get their own
+  correct outcome in the same pass.
+
+Verified live against a real person, not only unit tests. Marin stood in front of gate-in;
+enrolling and recognising him fired a real `gate_decision` event through the actual running
+pipeline - visible on the live SSE stream and in `audit_log` a moment later, both carrying the
+correct name, node and outcome. Before he was enrolled, three real pass-sensor trips (desk
+handling) correctly produced three `unidentified_passage` alerts rather than silently doing
+nothing or crashing - proof the passage-binding wiring executes correctly against real sensor
+data, not just fabricated test input.
+
+**Honest gap for today:** a genuine sensor-confirmed `entry` was not captured live - the pass
+ultrasonic did not trip again in the ~12s window after the decision fired, most likely because
+the physical pass sensor was not within reach of where Marin was sitting for the test. The
+`entry` code path itself is not unverified, though: it is covered by a dedicated unit test
+(`test_beat_one_then_beat_two_granted_entry`) exercising the exact same pure sequence, and its
+database-writing half (`presence.commit_entry`) is structurally identical to `denied_crossed`
+and `exit`, both of which the concurrent-entry and exit-without-entry logic paths share. A real
+live passage capture is worth doing once field recon resumes and the boards are back at their
+actual mounted positions.
+
 ### A board on USB power flaps on WiFi while battery-only boards do not, 2026-09-03
 
 **Status: confirmed by a controlled before/after test on live hardware.**
