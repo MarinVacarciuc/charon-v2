@@ -301,6 +301,31 @@ Test data (person "RainTest" and its embedding) deleted immediately after - this
 pipeline check, not real roster data. Real enrolment is Day 10, in the yard, in the actual
 shoot lighting, per REBUILD_PROMPT §10's own lesson.
 
+### Overstay detection and audit export, 2026-09-03
+
+**Status: built and verified.** Overstay is the one anomaly nobody triggers: no camera sees an
+event, no sensor fires, nothing happens. It is the *absence* of an event, which is why it has
+to be a timed sweep rather than a reaction.
+
+The deadline comes from `policy.overstay_deadline`, which is pure and already tested against
+the case that broke the previous build - a shift ending after midnight, handled by anchoring
+to the entry timestamp rather than to "today". Verified live: a person who entered at 09:00 on
+a 09:00-17:00 shift, with a 5-minute grace, was flagged at 18:02 as **57 minutes past their
+expected departure**. The arithmetic is right and the message says the number rather than just
+"overstaying".
+
+One alert per stay, and the flag that enforces it is a **database column, not a variable**.
+The previous build tracked it in a process-local dict, so every restart re-alerted the
+dispatcher about everyone still on site - the same class of fault as an in-memory strictness
+flag silently reverting. Verified that a second sweep 35 s later did not re-alert, and that
+leaving clears the flag (along with the session token) so a person's next visit is a fresh
+stay that can alert again. A take reset clears it too, since a new take is a new stay.
+
+`GET /audit.csv` exports the whole trail with person and zone names resolved from their
+foreign keys, filename stamped with the export time. This is the report evidence: the audit
+table reproduces the old flat log with `SELECT ts, message ORDER BY ts`, but severity and the
+joins make it queryable in a way the old text file never was.
+
 ### Admin authentication (threat model A7), 2026-09-03
 
 **Status: built.** A7 sat at "partly implemented" for the entire life of the previous build:

@@ -6,6 +6,7 @@ Shutdown reverses it - stop pollers before pulling the database out from under t
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 
 import aiohttp
@@ -16,6 +17,7 @@ from fastapi.staticfiles import StaticFiles
 from .api import auth, routes_admin, routes_nodes, routes_people
 from .config import SERVER_DIR, get_settings
 from .db.database import Database
+from .alerts.overstay import OverstayWatch
 from .alerts.telegram import Telegram
 from .alerts.voice import VoicePlayer
 from .db.repositories import embeddings
@@ -66,6 +68,8 @@ def create_app() -> FastAPI:
         app.state.hub = hub
         app.state.registry = registry
         app.state.events = events
+        app.state.overstay_task = asyncio.create_task(
+            OverstayWatch(db, hub, telegram).run(), name="overstay")
         log.info("brain up: %d node(s) polling, db at %s", len(registry.all()), settings.db_path)
         if settings.admin_token:
             log.info("admin auth: ON (mutating routes require the %s header)", auth.HEADER)
@@ -77,6 +81,7 @@ def create_app() -> FastAPI:
 
     @app.on_event("shutdown")
     async def shutdown() -> None:
+        app.state.overstay_task.cancel()
         await app.state.registry.stop()
         await app.state.session.close()
         await app.state.db.close()

@@ -1,7 +1,11 @@
 """Audit access and the take-reset control."""
 from __future__ import annotations
 
+import csv
+import io
+
 from fastapi import APIRouter, Depends, Request
+from fastapi.responses import Response
 
 from ..db.database import utcnow
 from ..db.repositories import audit
@@ -25,7 +29,8 @@ async def reset_take(request: Request):
     permanent trail rather than erasing everything before it."""
     db = request.app.state.db
     await db.execute(
-        "UPDATE people SET presence='out', session_token='', at_zone_id=NULL, entry_time='', updated_at=?",
+        "UPDATE people SET presence='out', session_token='', at_zone_id=NULL, entry_time='', "
+        "overstay_alerted_at='', updated_at=?",
         (utcnow(),),
     )
     request.app.state.events.reset_live_state()
@@ -59,3 +64,36 @@ async def set_config(request: Request):
         await audit.record(db, "config_change", ", ".join(f"{k}={v}" for k, v in changed.items()),
                            actor="admin")
     return {"ok": True, "changed": changed}
+
+
+@router.get("/audit.csv")
+async def audit_csv(request: Request, limit: int = 5000):
+    """The whole trail as a file, for the report.
+
+    Read-only and unauthenticated like the rest of the read surface, which is a deliberate
+    trade-off worth naming: on a private network this is a convenience, and on a hostile one
+    it would be a disclosure. It is listed with TLS in the designed-not-built column rather
+    than quietly ignored.
+    """
+    rows = await request.app.state.db.fetch_all(
+        """
+        SELECT a.ts, a.severity, a.event_type, a.actor, a.node_id,
+               p.name AS person, z.name AS zone, a.message
+        FROM audit_log a
+        LEFT JOIN people p ON p.id = a.person_id
+        LEFT JOIN zones  z ON z.id = a.zone_id
+        ORDER BY a.id
+        LIMIT ?
+        """, (limit,))
+
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow(["timestamp_utc", "severity", "event", "actor", "node", "person", "zone", "message"])
+    for r in rows:
+        w.writerow([r["ts"], r["severity"], r["event_type"], r["actor"],
+                    r["node_id"] or "", r["person"] or "", r["zone"] or "", r["message"]])
+
+    stamp = utcnow().replace(":", "").replace("-", "").replace(" ", "-")
+    return Response(
+        content=buf.getvalue(), media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="charon-audit-{stamp}.csv"'})

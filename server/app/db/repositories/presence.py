@@ -48,7 +48,8 @@ async def commit_exit(db: Database, person_id: int) -> bool:
     was_in = bool(row and row["presence"] == "in")
     await db.execute(
         """
-        UPDATE people SET presence = 'out', session_token = '', at_zone_id = NULL, updated_at = ?
+        UPDATE people SET presence = 'out', session_token = '', at_zone_id = NULL,
+                          overstay_alerted_at = '', updated_at = ?
         WHERE id = ?
         """,
         (utcnow(), person_id),
