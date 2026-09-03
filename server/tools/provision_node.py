@@ -112,8 +112,24 @@ def main() -> int:
         return 1
     print(f"  {host} -> {ip}")
 
-    with urllib.request.urlopen(f"http://{ip}/status", timeout=8) as resp:
-        s = json.loads(resp.read())
+    # mDNS answering is not the same as the HTTP server being ready to accept a connection -
+    # the board is still finishing setup() a moment after it advertises itself, and the first
+    # request can land in that gap. Retry rather than treating one timeout as a failed flash.
+    s = None
+    last_exc: Exception | None = None
+    for attempt in range(6):
+        try:
+            with urllib.request.urlopen(f"http://{ip}/status", timeout=4) as resp:
+                s = json.loads(resp.read())
+            break
+        except (urllib.error.URLError, TimeoutError, OSError) as exc:
+            last_exc = exc
+            time.sleep(1.5)
+    if s is None:
+        print(f"  /status did not answer after 6 attempts: {last_exc}")
+        print("  the image flashed and hash-verified, and the node resolved - this looks like")
+        print(f"  the board still settling. Try: curl http://{host}/status")
+        return 1
 
     checks = [
         ("node id matches the MAC", s["node"] == node),
