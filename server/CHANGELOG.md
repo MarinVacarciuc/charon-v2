@@ -93,6 +93,42 @@ once boards are spread across the yard per their mounting positions, which is
 what the camera-off-by-default design targets. The 1.5 s status timeout held
 under this worst case with zero failures, so it stands as measured.
 
+## v2-skeleton - 2026-09-03
+
+FastAPI brain skeleton, running end to end against all six live boards rather than
+against one as the checkpoint asked for. app/main.py wires together: Database
+(runs migrations on startup), aiohttp.ClientSession, SseHub, a NodeRegistry that
+loads all enabled nodes from the `nodes` table and starts one supervised poller
+per node, and BrainEvents, which is where poller events actually go somewhere -
+audit_log rows for online/offline/passage, SSE pushes for the same. Routes:
+GET /frame.jpg?node= (served from the poller's cache, not proxied per request -
+one open dashboard tab and six do not cost the node six times), GET /nodes (a
+full live snapshot: state, online, cam_on, near/pass readings, passages,
+restarts), GET /events (SSE, EventSource-friendly, 15s keepalive).
+
+Verified against real hardware, not asserted: all six nodes online within a
+second of startup; /frame.jpg?node=gate-in returns a real JPEG (magic bytes
+checked) through the running server; /frame.jpg on an unknown node returns 404
+cleanly; a live SSE session actually caught a real node flapping and the
+matching audit_log rows were there a moment later - the pipeline was exercised
+by a genuine event, not a synthetic one.
+
+Added tests/test_registry_smoke.py: a permanent, hardware-free check that the
+`nodes` table loads into the correct NodeLive objects (roles, zones, gate
+direction), so a future schema or mapping change breaks a test rather than
+being noticed live against real boards.
+
+That flapping led to a finding worth recording on its own: one board
+(zone-workshop) cycled offline/online roughly every 8-90 seconds while it was
+connected to USB for an unrelated MAC read, while the other five boards - on
+battery power only - logged exactly one online event each and never flapped
+again. Removing the USB cable is being confirmed live; see
+docs/REPORT_NOTES.md. Confirmed: after unplugging USB from zone-workshop,
+zero offline events in the following 150s, against a prior pattern of roughly
+one every 8-90s with USB connected. The practical rule this sets: a board goes
+fully to battery before any real test, USB is for flashing only - which
+matters for how field recon days are run, not just as a curiosity.
+
 ## v1-firmware - in progress
 
 Node firmware v2. Written and compiling (37% flash, 19% RAM); not yet on hardware.

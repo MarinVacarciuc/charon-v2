@@ -260,6 +260,48 @@ quoted second-hand:
 | Phantom passages without hysteresis | 6 in 8 s with nobody present | already fixed; cite as the reason hysteresis exists |
 | Ultrasonic multipath on a cluttered desk | 13 to 200 cm frame to frame | **reproduced: 33-233 cm, see above** |
 
+### A board on USB power flaps on WiFi while battery-only boards do not, 2026-09-03
+
+**Status: confirmed by a controlled before/after test on live hardware.**
+
+While building the brain skeleton, the audit log showed one board (zone-workshop) cycling
+offline/online every 8-90 seconds, while the other five - all on battery power only - logged
+exactly one online event each since the brain started and never flapped again. The only
+difference: zone-workshop had a USB cable connected (left over from reading its MAC a few
+minutes earlier), while the other five did not.
+
+Test: leave everything else running, unplug the USB cable from zone-workshop only, watch the
+audit log for 150 s. Result: **zero offline events in 150 s**, against a prior pattern of one
+roughly every 8-90 s. Nothing else about the board or the network changed in that window.
+
+Plausible mechanism, not yet isolated further (not worth the time on a two-week schedule):
+USB and WiFi share the same SoC, and either power-rail noise from the USB connection or CPU/
+interrupt contention between the native USB CDC stack and the WiFi stack is degrading the
+radio while both are active. Whichever it is, the practical rule is simple and now backed by a
+measurement rather than a hunch: **a board is for flashing on USB, then it goes fully to
+battery before any real test.** This matters operationally - it means a "let me just plug in
+and check something" during a dry run can quietly reintroduce instability that has nothing to
+do with whatever was actually being checked.
+
+### microSD on the zone boards
+
+**Status: designed, not built.** 2026-09-03. The four interior boards carry a microSD slot
+with cards already inserted, unused. This maps directly onto threat model B3 ("single point
+of failure - one brain"), which already records store-and-forward to microSD as a documented
+design, not implemented. Ranked by cost against value if ever built: (1) a local, brain-
+independent audit log of near-sensor trips and wake events - cheap, and a genuine
+defense-in-depth story extending the gate's Uno failover to the interior zones; (2) full
+store-and-forward buffering of brain-bound events during a network drop, replayed on
+reconnect - the literal B3 mitigation, higher complexity (replay/sync logic); (3) crash-dump
+forensics for build-time debugging - useful to us, not report-facing.
+
+Deliberately not pursued now: the wiring of the SD slot on this specific (generic, unbranded)
+board is unverified, and the four remaining free GPIOs on a zone board (21, 42, 47, 48) may
+not be enough for 4-bit SDMMC - a real risk of conflicting with the already-soldered near/pass
+sensor pins (38-41) on cheap clone boards. `DEMO_ARCHITECTURE` is explicit that untested
+robustness which never appears on camera is a report improvement, not a build target; this is
+exactly that.
+
 ## Still to write up
 
 - The Arduino Uno's role as an evolution of the decision, not a pre-existing design. The
