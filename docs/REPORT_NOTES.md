@@ -68,7 +68,7 @@ This is an example of removing a failure mode *by construction* rather than by p
 
 ### Cameras are off until someone is present
 
-**Status: built (firmware); pending hardware validation.** 2026-09-02.
+**Status: built and validated on hardware.** 2026-09-02, soak-tested 2026-09-03.
 
 Each node keeps its camera powered down and initialises it only when the ultrasonic near
 sensor reports someone within range, sleeping again after 20 s idle. WiFi stays up
@@ -80,15 +80,73 @@ This is the privacy-by-design and energy-efficiency argument for LO4: the system
 record until there is something to record. `[CITE: data minimisation / privacy by design -
 UK GDPR Art. 5(1)(c) and Art. 25]`
 
-*Risk being carried:* repeated `esp_camera_init` / `esp_camera_deinit` cycling is not yet
-proven stable over hundreds of cycles on this hardware. A bench soak test of 100 cycles,
-logging free heap and die temperature, gates whether this ships. If it fails, the fallback
-is a camera that stays initialised but serves no frames while idle, and the energy claim
-becomes a measured limitation rather than a built feature.
+*Risk resolved 2026-09-03.* The 108-cycle bench soak passed with no failures, no reboot
+and no heap leak (see Measurements). The fallback of keeping the camera initialised while
+idle is not needed, and the energy and privacy claim is a measured feature rather than an
+aspiration.
 
 ---
 
 ## Measurements to date
+
+### Camera wake/sleep soak, gate-in, 2026-09-03
+
+The camera-off-by-design decision was gated on this, because a leaky or fragile
+`esp_camera_init` / `esp_camera_deinit` cycle would present as a board that quietly stops
+serving frames hours into a shoot. Run with `server/tools/camera_soak.py` against the real
+board over WiFi.
+
+| Quantity | Result |
+|---|---|
+| Cycles | 108 (100 wake/sleep, 8 wake/frame/sleep) |
+| Failures | 0 |
+| Board reboots | 0 (uptime rose 14 s to 378 s unbroken) |
+| Free heap, camera asleep | 195 632 B first, 196 168 B last |
+| Heap drift | **+536 B over 108 cycles (+5.0 B/cycle)** - no leak; positive drift is allocator noise |
+| Free heap, camera awake | ~172 800 B |
+| Cost of holding the camera on | **~23 400 B of internal heap** (frame buffers themselves sit in PSRAM) |
+| Die temperature | 63.6 to 66.6 C |
+| Wake plus first frame | median 937 ms (872 to 989) |
+| Frame size, VGA quality 12 | median 9 907 B (9 634 to 12 364) |
+
+The ~1 s wake is the reason the near sensor wakes the camera rather than the first frame
+request: at a walking pace, 2.5 m of approach is about the margin needed for the camera to
+be ready by the time a face is in frame.
+
+Verdict: **ships as designed.** The fallback of keeping the camera initialised while idle is
+not needed.
+
+### mDNS resolution, 2026-09-03
+
+Measured with `server/tools/measure_dns.py` against the live node.
+
+| Resolution | Median | Min | Max |
+|---|---|---|---|
+| `AF_UNSPEC` (the OS default) | 35 002 ms | 5 011 ms | 35 013 ms |
+| `AF_INET` (what the brain uses) | 0.8 ms | 0.7 ms | 1.1 ms |
+
+The 5 011 ms floor reproduces the previously documented 5.002 s exactly: macOS asks for both
+A and AAAA records, the ESP32 answers the A half and never answers the AAAA half, and the
+resolver waits out the full IPv6 timeout every time. The much worse median was measured
+while the board was under load from the soak test, when some mDNS responses were dropped and
+the timeout was paid several times over. That is the honest worst case, and it is the
+condition the system actually runs in.
+
+Presented as OFFLINE nodes rather than as slow ones, which is what made it expensive to
+diagnose the first time. `app/nodes/resolver.py` forces `AF_INET`, caches for 60 s, and
+connects by literal IP so no resolver runs on the request path at all.
+
+### Ultrasonic behaviour on a bench, 2026-09-03
+
+Near-sensor readings on a cluttered desk swung between 33 cm and 233 cm frame to frame with
+nothing moving. This is multipath, not sensor noise, and no software filter fixes it: it is
+why thresholds are calibrated at the final mounted position and why the PASS sensor counted
+phantom passages while the board sat on a desk. The two-reading debounce was observed
+rejecting single stray samples correctly (a lone 54 cm reading did not flip the state).
+
+### Toolchain and startup
+
+
 
 | Quantity | Value | How measured | Date |
 |---|---|---|---|
@@ -104,11 +162,11 @@ quoted second-hand:
 
 | Quantity | Previously measured | Status |
 |---|---|---|
-| mDNS lookup, `AF_UNSPEC` vs `AF_INET` | 5.002 s vs 0.010 s | to re-measure in the brain |
+| mDNS lookup, `AF_UNSPEC` vs `AF_INET` | 5.002 s vs 0.010 s | **re-measured, see above** |
 | Own-face cosine similarity through the OV5640 | 0.63 to 0.93, typically 0.70 to 0.75 | to re-measure after re-enrolment |
-| Continuous-streaming die temperature | 65 to 68 C | to re-measure with the wake/sleep cycle |
+| Continuous-streaming die temperature | 65 to 68 C | **re-measured: 63.6-66.6 C under wake/sleep cycling** |
 | Phantom passages without hysteresis | 6 in 8 s with nobody present | already fixed; cite as the reason hysteresis exists |
-| Ultrasonic multipath on a cluttered desk | 13 to 200 cm frame to frame | reason thresholds are calibrated in place |
+| Ultrasonic multipath on a cluttered desk | 13 to 200 cm frame to frame | **reproduced: 33-233 cm, see above** |
 
 ## Still to write up
 

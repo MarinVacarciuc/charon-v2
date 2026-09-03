@@ -157,8 +157,17 @@ static bool probeAndPinMap() {
   return false;
 }
 
+// Push the sleep deadline out, never pull it in. Several things ask to keep the camera
+// awake - a near trip, a frame request, an explicit /wake hold - and they must not be able
+// to cut each other short. Without this, a dashboard asking for a 5 minute hold would be
+// silently reduced to 20 seconds by the first person who walked past the sensor.
+static void keepCameraAwakeFor(uint32_t ms) {
+  uint32_t want = millis() + ms;
+  if (!camOn || (int32_t)(want - camIdleAt) > 0) camIdleAt = want;
+}
+
 static bool cameraWake() {
-  if (camOn) { camIdleAt = millis() + CAM_IDLE_MS; return true; }
+  if (camOn) { keepCameraAwakeFor(CAM_IDLE_MS); return true; }
   bool ok = false;
   if (pinnedMap >= 0) {
     ok = startCamera(MAPS[pinnedMap]);
@@ -175,7 +184,7 @@ static bool cameraWake() {
   }
   if (ok) {
     camOn = true;
-    camIdleAt = millis() + CAM_IDLE_MS;
+    camIdleAt = millis() + CAM_IDLE_MS;   // fresh wake: this IS the deadline, not an extension
     Serial.printf("[charon] camera ON (%s)\n", MAPS[pinnedMap].name);
   }
   return ok;
@@ -258,7 +267,7 @@ static void handleShot() {
     server.send(503, "text/plain", "camera unavailable");
     return;
   }
-  camIdleAt = millis() + CAM_IDLE_MS;
+  keepCameraAwakeFor(CAM_IDLE_MS);
   camera_fb_t *fb = esp_camera_fb_get();
   if (!fb) {
     server.sendHeader("X-Cam-On", "1");
@@ -288,6 +297,10 @@ static void handleWake() {
   if (sec < 1)   sec = 1;
   if (sec > 300) sec = 300;
   bool ok = cameraWake();
+  // An explicit operator request SETS the deadline rather than extending it: asking for a
+  // short look must actually give a short look, or the reported for_s is a lie. This does
+  // not strand anyone standing in front of the sensor - the near-sensor refresh in loop()
+  // pushes the deadline back out on the very next tick while they are still there.
   if (ok) camIdleAt = millis() + (uint32_t)sec * 1000UL;
   server.send(ok ? 200 : 503, "application/json",
               String("{\"cam_on\":") + (ok ? "true" : "false") +
@@ -482,8 +495,9 @@ void loop() {
     } else {
       if (pollSonar(S_NEAR)) cameraWake();               // interior board: near only
     }
-    // Someone still standing there keeps the camera alive without re-triggering.
-    if (S_NEAR.blocked && camOn) camIdleAt = millis() + CAM_IDLE_MS;
+    // Someone still standing there keeps the camera alive without re-triggering. Extends
+    // only: a person walking past must not cut short a longer hold the dashboard asked for.
+    if (S_NEAR.blocked && camOn) keepCameraAwakeFor(CAM_IDLE_MS);
   }
 
   if (camOn && (int32_t)(millis() - camIdleAt) >= 0) cameraSleep();

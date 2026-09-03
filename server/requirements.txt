@@ -11,3 +11,6 @@ python-multipart==0.0.20
 # (SFace), so no dlib and no separate model runtime are needed.
 numpy>=2.0
 opencv-contrib-python>=4.10
+
+# Serial access to the boards (boot logs, Uno watchdog bench)
+pyserial==3.5
