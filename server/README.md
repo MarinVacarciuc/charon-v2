@@ -27,9 +27,16 @@ The two ONNX models live in `server/models/` (gitignored, ~39 MB):
 
 ## Run
 
+Double-click `Start Charon.command` / `Stop Charon.command` in `server/`, or from a terminal:
+
 ```bash
-server/run.sh
+cd server && ./run.sh      # Ctrl+C, or ./stop.sh from another window, to stop
 ```
+
+Keep the terminal window open while it runs - closing it kills the server. Give it about ten
+seconds after starting: it loads the recognition models and connects to six boards before the
+dashboard has anything to show, and an empty board in that window is normal rather than broken.
+A second `./run.sh` refuses to start rather than failing later with "address already in use".
 
 Binds to all interfaces and prints the URLs the other devices should use. Do **not** start it
 on `127.0.0.1`: a second browser on this Mac will work fine while the phone at the gate cannot

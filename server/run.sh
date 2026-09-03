@@ -16,6 +16,13 @@ if [ ! -f .env ]; then
   echo "server/.env missing - copy .env.example and set CHARON_ADMIN_TOKEN"; exit 1
 fi
 
+# Refuse to start a second copy rather than failing later with "address already in use",
+# which is a confusing way to discover the first one is still running.
+if pgrep -f "uvicorn app.main:app" > /dev/null; then
+  echo "Charon brain is already running. Stop it first:  ./stop.sh"
+  exit 1
+fi
+
 # Print the addresses the other devices should actually use, so nobody has to go hunting for
 # the laptop's IP on shoot day.
 echo "Charon brain starting on ${HOST}:${PORT}"
