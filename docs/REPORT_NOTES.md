@@ -136,6 +136,36 @@ Presented as OFFLINE nodes rather than as slow ones, which is what made it expen
 diagnose the first time. `app/nodes/resolver.py` forces `AF_INET`, caches for 60 s, and
 connects by literal IP so no resolver runs on the request path at all.
 
+### Node polling and failure detection, 2026-09-03
+
+Measured against the live `gate-out` board and, for the failure case, against a LAN address
+with nothing listening (which is what an unplugged board looks like from the brain).
+
+| Quantity | Value |
+|---|---|
+| `/status` response | median 20 ms, p95 35 ms, max 67 ms (n=40) |
+| `/shot.jpg` response, camera already awake | median 41 ms, max 61 ms (n=8) |
+| Frames delivered from one awake node | ~1.7 per second at a 3 Hz poll |
+| Time to declare a dead node OFFLINE | **6.3 s** (was 8.0 s before splitting the timeouts) |
+
+The request timeout was originally one value for both endpoints. Splitting it matters
+because how quickly a dead board is noticed is bounded by the timeout on the cheap endpoint:
+`/status` touches no hardware, so 1.5 s is a twentyfold margin over its worst measured
+response while still failing fast, whereas `/shot.jpg` may have to power the camera up first
+and needs seconds. Detection is now bounded by the 6 s grace period itself, which exists so
+that one dropped poll on a phone hotspot does not raise a security event.
+
+A second finding from the same test: resolving a `.local` name that nobody answers costs the
+full mDNS timeout, so a node that had just died was only being retried every ~2.7 s. The
+poller now keeps hitting the last known address while a node is down - a TCP connection to a
+dead host fails in milliseconds - and only re-resolves after ten consecutive failures, which
+is the case where the node genuinely moved to a new address.
+
+Fault isolation was verified rather than assumed: with one board live and one unpowered, the
+live node kept delivering frames with zero errors while the dead one sat OFFLINE. That is
+the property the per-node supervisor exists to guarantee, and the previous build did not
+have it - four of six camera workers died silently in one afternoon.
+
 ### Ultrasonic behaviour on a bench, 2026-09-03
 
 Near-sensor readings on a cluttered desk swung between 33 cm and 233 cm frame to frame with
