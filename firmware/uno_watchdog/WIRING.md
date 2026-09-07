@@ -156,7 +156,14 @@ cd ~/IdeaProjects/charon-v2/server
   --outage-start "2026-09-14 14:32:00" --dry-run
 ```
 
-Drop `--dry-run` to write. `--outage-start` is when the Uno booted or the outage began: the
+Drop `--dry-run` to write, and add `--clear` to erase the board's journal once the rows are
+safely in the database - so the next outage starts from empty rather than accumulating.
+
+The order matters and the tool enforces it: read, import, confirm, *then* erase. Clearing
+first would turn any crash in between into permanently lost records, and they are
+unrecoverable by construction, since the board is the only place they ever existed.
+
+`--outage-start` is when the Uno booted or the outage began: the
 board has no clock, so its records are offsets in seconds, and this anchors them to real time.
 Without it the rows still import but are marked approximate rather than quietly pretending to
 be exact.

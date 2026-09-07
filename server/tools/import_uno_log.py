@@ -36,6 +36,26 @@ OUTCOME_SEVERITY = {
 }
 
 
+def clear_journal(port: str, baud: int = 9600) -> bool:
+    """Erase the board's journal. Only ever called AFTER the rows are safely in the database.
+
+    That order is the whole point. Clearing first, or clearing on the assumption the import
+    worked, turns any crash in between into permanently lost security records - and they are
+    unrecoverable by construction, because this board is the only place they ever existed.
+    """
+    import time
+    with serial.Serial(port, baud, timeout=1) as ser:
+        time.sleep(2.0)
+        ser.reset_input_buffer()
+        ser.write(b"CLEAR\n")
+        deadline = time.monotonic() + 5.0
+        while time.monotonic() < deadline:
+            line = ser.readline().decode("utf-8", "replace").strip()
+            if line.startswith("JOURNAL_CLEARED"):
+                return True
+    return False
+
+
 def read_journal(port: str, baud: int = 9600, timeout_s: float = 12.0) -> tuple[list[dict], dict]:
     rows: list[dict] = []
     meta: dict = {}
@@ -113,6 +133,8 @@ def main() -> int:
     ap.add_argument("--outage-start", default=None,
                     help='when the board booted / the outage began, "YYYY-MM-DD HH:MM:SS"')
     ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--clear", action="store_true",
+                    help="erase the board's journal once the rows are safely imported")
     args = ap.parse_args()
 
     anchor = None
@@ -144,6 +166,19 @@ def main() -> int:
 
     n = asyncio.run(import_rows(rows, meta, anchor, exact=anchor is not None))
     print(f"\nimported {n} record(s) into audit_log")
+
+    if args.clear:
+        # Deliberately after the import returned, not alongside it. The board is the only
+        # place these records exist until this point.
+        if clear_journal(args.port):
+            print("board journal cleared - the next outage starts from empty")
+        else:
+            print("WARNING: the board did not confirm the erase. The rows ARE imported; the "
+                  "journal still holds them and will be imported again unless you clear it.",
+                  file=sys.stderr)
+            return 1
+    else:
+        print("board journal left intact (pass --clear to erase it now that it is imported)")
     return 0
 
 
