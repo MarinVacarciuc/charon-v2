@@ -145,6 +145,31 @@ button{
 }
 button:hover{border-color:var(--accent)}
 button.arm{background:rgba(255,92,92,.18); border-color:rgba(255,92,92,.55); color:#ffd7d7}
+
+/* ---------- mobile ----------
+   The layout above is built for a 1080p recording and assumes a fixed viewport height with
+   panes scrolling internally - correct for that screen, wrong for a phone. docs/FIELD_DAY.md
+   explicitly has an operator open this on their phone to check node health while walking the
+   yard, so this is a real, load-bearing use case rather than a nice-to-have. Below the
+   breakpoint the page becomes a normal scrolling page: one column, natural height, nothing
+   forced narrower than its content (which is what caused the horizontal scroll - a flex/grid
+   item's default min-width is its content size, not 0). */
+@media (max-width: 860px){
+  body{overflow:auto; height:auto; min-height:100%}
+  header{flex-wrap:wrap; gap:10px 20px}
+  .hcount{gap:16px}
+  .strip{flex-wrap:wrap}
+  .chip{flex:1 1 100%; min-width:0}
+  main{display:block; padding:14px 14px; overflow:visible}
+  .pane{margin-bottom:16px}
+  .board{display:block}
+  .col{margin-bottom:10px; min-height:0}
+  .col .cards{overflow-y:visible; max-height:none}
+  .feed{overflow-y:visible}
+  .tiles{grid-template-columns:repeat(2,1fr); padding:0 14px 12px}
+  footer{flex-wrap:wrap}
+  .trail{white-space:normal; flex-basis:100%}
+}
 </style>
 
 <header>

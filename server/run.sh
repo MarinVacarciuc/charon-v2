@@ -35,4 +35,19 @@ done
 echo "  (on this Mac)  http://127.0.0.1:${PORT}/"
 echo
 
+# Enrolling or changing a setting from a phone asks for this once, then remembers it on that
+# phone. Printed here rather than only living in .env, because the file is not something a
+# phone in the yard can casually open, and this is the one place already read for the URLs
+# above. On the shared-secret-over-a-private-network threat model this project actually has,
+# showing it in a terminal only the operator sees is not a meaningful escalation.
+ADMIN_TOKEN="$(grep '^CHARON_ADMIN_TOKEN=' .env | cut -d= -f2-)"
+if [ -n "$ADMIN_TOKEN" ]; then
+  echo "  admin token    $ADMIN_TOKEN"
+  echo "                 (enter once per device when Staff/Settings asks; it is then remembered)"
+else
+  echo "  admin token    NOT SET - enrolment and settings changes will be refused. Set"
+  echo "                 CHARON_ADMIN_TOKEN in server/.env."
+fi
+echo
+
 exec .venv/bin/uvicorn app.main:app --host "$HOST" --port "$PORT" --app-dir .

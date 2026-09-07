@@ -352,6 +352,45 @@ still checks credentials" is a better thing to film than someone walking up to a
 opens for anybody, and tapping a card is a deliberate, legible action in a way that walking
 forward is not.
 
+### Marin could not enrol from his phone, 2026-09-07
+
+**Status: fixed, verified in a real browser at a real mobile viewport.** Reported directly:
+"I tried to enrol today and couldn't - it asked for the admin token."
+
+Reproduced rather than assumed. Opening Staff on a phone viewport showed the real cause was
+two compounding problems, not the one reported:
+
+1. **The page itself was unusable on a phone.** Staff and Dashboard were built as fixed
+   desktop grids (a 330px sidebar plus a detail pane; a 62/38 two-column split; 6-column
+   zone/tile grids) with `body{overflow:hidden}`, correct for the 1080p recording the
+   dashboard is explicitly designed for, wrong for a phone. On an actual mobile width the
+   enrol form - the Capture button included - was rendered off-screen to the right, reachable
+   only by scrolling a page that was never meant to scroll horizontally. Settings had the
+   same fault in its node-calibration section, which `docs/FIELD_DAY.md` explicitly sends an
+   operator to use standing at a board in the yard.
+
+   Fixed with a `@media (max-width: ...)` block per page: stack what was side-by-side, let
+   the page scroll vertically instead of each pane scrolling in its own fixed-height box, and
+   verified in a real mobile viewport that no page requires horizontal scroll and the enrol
+   form, in particular, is fully reachable and legible.
+
+2. **The token prompt itself worked correctly** - reproduced by clearing the browser's stored
+   token and clicking enrol: the native prompt fires exactly as designed, asking for
+   "Admin token (from server/.env)". The design was sound and the instruction was not: a
+   phone standing at a camera in the yard has no path to that file. Fixed by printing the
+   token in `run.sh`'s startup banner, the same place already read for the LAN URLs, with a
+   note that it is entered once per device and then remembered.
+
+A third, smaller fault surfaced while reproducing this: a wrong or missing token returned
+FastAPI's default `{"detail": "..."}` body, and the client only ever read `.error`, so every
+auth failure showed a hardcoded "Enrolment failed." instead of the actual reason. Fixed to
+read `j.error || j.detail`, so a future auth problem says what it is.
+
+This is the same lesson as the settings-effect finding a few hours earlier, from the opposite
+direction: the mechanism (auth, in both cases) was correct, and what had not been verified was
+the actual path an operator takes to use it - here, specifically, from the device the design
+assumed rather than the device it will actually be used from.
+
 ### Pre-shoot adversarial review: two real defects, 2026-09-07
 
 An adversarial review was run over the whole system five days before filming, specifically

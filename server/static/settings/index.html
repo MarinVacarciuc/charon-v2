@@ -44,6 +44,19 @@ label{display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--ink-
 .msg.on{display:block}
 .msg.ok{background:rgba(61,220,132,.14);border:1px solid rgba(61,220,132,.4)}
 .msg.err{background:rgba(255,92,92,.14);border:1px solid rgba(255,92,92,.4)}
+
+/* ---------- mobile ----------
+   docs/FIELD_DAY.md has an operator recalibrate a node's sensors from this page while
+   standing next to it, so this has to work one-handed on a phone. The two-column .setting
+   and four-column .node grids were sized for a desktop and did not fit. */
+@media (max-width: 640px){
+  body{overflow:auto; height:auto; min-height:100%}
+  header{flex-wrap:wrap; gap:8px 16px}
+  nav{margin-left:0; flex-wrap:wrap}
+  .setting{grid-template-columns:1fr}
+  .setting .ctl{justify-content:stretch}
+  .node{grid-template-columns:1fr}
+}
 </style>
 
 <header>
@@ -158,7 +171,7 @@ function renderNodes(){
     const r = await adminFetch(`/nodes/${id}/threshold?`+q.join("&"), {method:"POST"});
     const j = await r.json();
     say(r.ok?`${id}: wake<${j.wake_cm}cm, passage<${j.pass_thresh_cm}cm (stored on the board).`
-            :(j.error||"The node did not accept it."), r.ok);
+            :(j.error||j.detail||"The node did not accept it."), r.ok);
     await load();
   });
 }
