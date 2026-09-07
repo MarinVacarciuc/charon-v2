@@ -301,6 +301,45 @@ Test data (person "RainTest" and its embedding) deleted immediately after - this
 pipeline check, not real roster data. Real enrolment is Day 10, in the yard, in the actual
 shoot lighting, per REBUILD_PROMPT §10's own lesson.
 
+### RFID as the failover credential, 2026-09-07
+
+**Status: built in firmware, pending wiring.** Marin's idea, and it fixes a weakness this
+project had already written down as a limitation rather than solved.
+
+The first failover design opened the gate on **presence alone**: while the smart path was
+down, anyone who walked up got in. That is a poor thing to present as a security feature, and
+it quietly contradicts the fail-secure posture the brief asks for on an entry lane
+(REBUILD_PROMPT B2). A card now opens the gate, and the ultrasonic keeps a different and
+better job: noticing that somebody approached, so an approach with **no card presented** is
+recorded (`NO_CARD`) instead of being silently rewarded with an open gate.
+
+The layering is the textbook one and is worth stating in exactly these terms: the primary
+factor is *something you are* (face), the failover is *something you have* (card). Degrading
+from one to the other loses convenience and loses the ability to tell people apart by
+appearance - it does **not** lose the ability to say no. That is the property that makes it a
+graceful degradation rather than a bypass.
+
+Costs, stated rather than buried:
+
+* **A card is clonable.** Anyone who learns a UID can write it to a blank card. That is the
+  generic weakness of a possession factor, and it is why the UIDs live in a gitignored
+  `cards.h` beside `secrets.h` rather than in the repository.
+* **Entry by card during an outage is invisible to the brain.** The heartbeat wire is
+  deliberately one-way (ESP32 to Uno), so when the brain recovers it has no idea anyone came
+  in. Reconciliation would need either a return wire or a manual check against the Uno's
+  serial log. This is the real price of an independent fallback: independence means it cannot
+  tell you what it did. Listed as designed-not-built.
+* **If the reader fails, nobody gets in during an outage.** For an entry lane that is the
+  correct posture, and it is more correct than what it replaced.
+
+The board still stays inert while the brain is alive - the reader is not even polled. Two
+systems deciding one gate is worse than either alone.
+
+Incidentally this improves the last beat on camera: "the smart path died and the perimeter
+still checks credentials" is a better thing to film than someone walking up to a gate that
+opens for anybody, and tapping a card is a deliberate, legible action in a way that walking
+forward is not.
+
 ### Overstay detection and audit export, 2026-09-03
 
 **Status: built and verified.** Overstay is the one anomaly nobody triggers: no camera sees an

@@ -1,6 +1,10 @@
 # ---- Secrets & credentials (NEVER commit) ----
 secrets.h
 **/secrets.h
+# Card UIDs are credentials: anyone who knows one can write it to a blank card.
+cards.h
+**/cards.h
+!**/cards.example.h
 *secret*
 !**/secrets.example.h
 .env
