@@ -352,6 +352,62 @@ still checks credentials" is a better thing to film than someone walking up to a
 opens for anybody, and tapping a card is a deliberate, legible action in a way that walking
 forward is not.
 
+### Rotating credentials for the failover: considered and declined, 2026-09-07
+
+**Status: designed, not built - and the reasoning is the point.** Recorded in full because a
+rejected design with a stated reason is stronger evidence of engineering judgement than a
+list of what was built.
+
+Marin proposed replacing the RFID card with one-time codes delivered over Telegram: while the
+system is healthy the brain issues each person a code and pre-loads it into the Uno; when the
+system fails the codes are sent to their phones; a code is entered at the gate and dies on
+use; on recovery the codes rotate.
+
+The rotation half is genuinely better than what is built. A card UID is static and clonable by
+anyone who learns it; a one-time code is neither. That is a real improvement and it is why
+this is recorded rather than dismissed.
+
+The delivery half cannot work, for a reason that generalises: **it depends on the thing that
+failed.**
+
+* Telegram is sent by the brain, over the internet. Of the three failures that trigger
+  failover - the gate ESP32 dies, the ESP32 loses WiFi, or the brain itself dies - the third
+  leaves nobody to send. That is precisely the case the third layer exists for, so the
+  fallback would be absent exactly when it is most needed.
+* The recipient's phone needs working network to receive the message. If the network is what
+  broke, and it is one of the likelier faults, the code never arrives.
+* Loading fresh codes *into* the Uno needs a channel to the Uno. It does not have one, by
+  design - that is why its card list is compiled in. Any rotating secret needs a channel, and
+  a channel is a dependency, which is the property this layer exists to not have.
+
+A synthesis does survive the first two objections: deliver the code **in advance**, while
+everything is healthy, rotating it periodically, so it is already on the phone before the
+failure. It still needs a keypad the project does not have, and it still needs a channel to
+the Uno for the matching secret.
+
+The more elegant variant, and the one worth naming as future work: rotate the secret **on the
+card itself**, rewritten by the reader during a normal healthy passage. MIFARE Classic sectors
+are writable, so the credential could change on every use with no channel to the Uno at all -
+keeping the no-network property *and* getting rotation. It needs a reader on the gate ESP32 as
+well as the Uno, and key management on a microcontroller with 2 KB of RAM.
+
+**Decision: keep RFID.** The properties that matter for a last line of defence are that it
+needs no network, no internet, no charged phone and no delivery. The card has all four; every
+alternative examined trades one of them away for rotation. Rotation is the right thing to want
+and the wrong thing to buy at that price.
+
+### The Uno's card list is a mirror, and mirrors go stale
+
+`cards.h` is the Uno's own copy of UID-to-name, compiled into the firmware because the board
+has no network and nobody to ask. That has a consequence worth stating plainly rather than
+discovering later: **suspending someone on the server does not reach the Uno.** During an
+outage, a revoked person's card still opens the gate.
+
+This is the classic offline-door-reader problem and it has no clean answer without a channel,
+which is the same trade examined above. It is bounded in practice - it only applies while the
+smart path is down, and the journal records who came in - but it is a real gap and belongs in
+the limitations column, not glossed over.
+
 ### Overstay detection and audit export, 2026-09-03
 
 **Status: built and verified.** Overstay is the one anomaly nobody triggers: no camera sees an
