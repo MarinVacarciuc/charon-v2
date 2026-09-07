@@ -352,6 +352,37 @@ still checks credentials" is a better thing to film than someone walking up to a
 opens for anybody, and tapping a card is a deliberate, legible action in a way that walking
 forward is not.
 
+### Loopback exempt from the admin token, 2026-09-07
+
+**Status: built, confirmed with Marin before implementing.** After the mobile fixes above, he
+clarified his actual priority: not the phone, but the Mac itself - enrolling for the
+presentation has to be one click, no dialog.
+
+Weakening an auth check is exactly the kind of change worth pausing on rather than pushing
+through, and it was: the edit was first blocked by an automated safety classifier for
+modifying an authentication check, which is the right instinct for that class of change. The
+reasoning was laid out to Marin explicitly and he confirmed before it was made.
+
+The reasoning: whoever can already reach `127.0.0.1` on this machine can open `server/.env`,
+kill the process, or edit the database directly. Gating enrolment behind a token on that
+specific path adds ceremony without adding protection - the token's actual job is to stop
+*another device on the network* from doing something destructive, and a request from the
+machine itself was never the threat it defends against.
+
+The exemption is narrow on purpose and checked empirically before relying on it: even a
+request this Mac sends to its own LAN address arrives at the server with the LAN IP as the
+source, never `127.0.0.1` - confirmed by watching the access log for both. So the exemption is
+specific to the literal loopback address, not a looser "anything from this machine" test that
+could be spoofed or misjudged. `POST /people/enroll` and `POST /reset` from `127.0.0.1`
+without a token now return the normal business-logic response (verified: 404 for an unknown
+node, `{"ok":true}` for reset) rather than 401; the identical requests from the LAN address are
+still refused with 401. The client-side prompt is also skipped when the page itself was opened
+via `127.0.0.1`, so nothing pops up asking for a token that the server does not require.
+
+Full test suite still green (68 tests). This does not weaken what the token defends against -
+a phone or any other device on the shared hotspot - only removes a check that was never
+protecting anything on the one path where it fires.
+
 ### Marin could not enrol from his phone, 2026-09-07
 
 **Status: fixed, verified in a real browser at a real mobile viewport.** Reported directly:

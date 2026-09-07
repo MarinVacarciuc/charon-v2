@@ -211,7 +211,12 @@ button.arm{background:rgba(255,92,92,.18); border-color:rgba(255,92,92,.55); col
    and browser history. Read-only routes never need it, so the board and the tiles keep
    working untouched even if the token is wrong or absent. */
 const TOKEN_KEY = "charon.admin";
+// The server itself skips the token for requests from 127.0.0.1 (see app/api/auth.py) - so
+// when this page was opened that way, there is nothing to ask for. This is what makes
+// enrolling from the Mac one click, per Marin's ask 2026-09-07: no prompt in the way.
+const ON_LOOPBACK = location.hostname === "127.0.0.1" || location.hostname === "localhost";
 function adminToken(force){
+  if(ON_LOOPBACK) return "";
   let t = force ? null : localStorage.getItem(TOKEN_KEY);
   if(!t){
     t = prompt("Admin token (from server/.env)") || "";
