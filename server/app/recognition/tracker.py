@@ -26,6 +26,13 @@ class IdentityTracker:
         self._agree = 0
         self._committed: int | None = None
 
+    def set_confirm_frames(self, n: int) -> None:
+        """Change the threshold on a running tracker. A LOWER value can satisfy an
+        already-accumulated streak immediately, which is intended: an operator lowering it in
+        the yard wants the next frame to behave, not a fresh run of agreement."""
+        if n >= 1:
+            self._confirm_frames = n
+
     def observe(self, raw_person_id: int | None) -> int | None:
         """Feed one frame's raw recognition result. Returns the currently committed identity
         (None if nothing has earned commitment yet, including "confirmed absent")."""

@@ -41,6 +41,7 @@ rsync -a --delete --delete-excluded \
   \
   `# --- secrets ---` \
   --exclude '*secret*' \
+  --exclude '**/cards.h' \
   --exclude '.env' --exclude '.env.*' \
   --exclude '*.key' --exclude '*.pem' \
   --exclude 'config.local.*' \
@@ -64,7 +65,8 @@ rsync -a --delete --delete-excluded \
 # Fail loudly rather than silently leaking: if anything in a forbidden class made
 # it across, say so. A backup that quietly ships biometrics is worse than none.
 LEAKS="$(find "$DST" \( -name '*.npy' -o -name '*.db' -o -name '*.sqlite*' \
-                     -o -name '.env' -o -name 'secrets.h' -o -name '*.key' -o -name '*.pem' \) \
+                     -o -name '.env' -o -name 'secrets.h' -o -name 'cards.h' \
+                     -o -name '*.key' -o -name '*.pem' \) \
                      -not -path '*/.git/*' 2>/dev/null || true)"
 if [ -n "$LEAKS" ]; then
   echo "[backup] REFUSING TO CLAIM SUCCESS - forbidden files present in the mirror:" >&2

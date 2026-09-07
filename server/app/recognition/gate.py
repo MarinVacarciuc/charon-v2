@@ -51,7 +51,8 @@ class GateEvent:
 
 
 def process_frame(state: GateNodeState, node_id: str, faces: list[FaceObservation],
-                  policy_check, now: datetime) -> list[GateEvent]:
+                  policy_check, now: datetime,
+                  bind_window_s: float = BIND_WINDOW_S) -> list[GateEvent]:
     """One frame -> zero or one `decision` event.
 
     `faces` should be pre-sorted largest first; only faces[0] drives the decision (a gate has
@@ -90,7 +91,8 @@ def process_frame(state: GateNodeState, node_id: str, faces: list[FaceObservatio
 
 
 def process_passage(state: GateNodeState, node_id: str, direction: str,
-                    faces_now: list[FaceObservation], now: datetime) -> list[GateEvent]:
+                    faces_now: list[FaceObservation], now: datetime,
+                    bind_window_s: float = BIND_WINDOW_S) -> list[GateEvent]:
     """A real, sensor-confirmed body crossing the lane - direction is "in" or "out", already
     resolved from which physical node's counter moved (never a global mode toggle)."""
     events: list[GateEvent] = []
@@ -99,7 +101,7 @@ def process_passage(state: GateNodeState, node_id: str, direction: str,
         events.append(GateEvent(kind="tailgating", node_id=node_id, face_count=len(faces_now)))
 
     pending = state.pending
-    fresh = pending is not None and (now - pending.decided_at) <= timedelta(seconds=BIND_WINDOW_S)
+    fresh = pending is not None and (now - pending.decided_at) <= timedelta(seconds=bind_window_s)
 
     if not fresh:
         events.append(GateEvent(kind="unidentified_passage", node_id=node_id))

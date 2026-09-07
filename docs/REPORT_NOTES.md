@@ -352,6 +352,57 @@ still checks credentials" is a better thing to film than someone walking up to a
 opens for anybody, and tapping a card is a deliberate, legible action in a way that walking
 forward is not.
 
+### Pre-shoot adversarial review: two real defects, 2026-09-07
+
+An adversarial review was run over the whole system five days before filming, specifically
+asking what would waste a field day rather than what was untidy. Five independent reviewers by
+dimension, each finding then attacked by a separate skeptic whose default was to refute.
+
+The run was cut short by a session limit: of roughly sixty candidate findings, only two
+completed verification. The remainder are **unverified and are not treated as defects** -
+unverified review output has a high false-positive rate and acting on it would be worse than
+ignoring it. Both verified findings were then independently confirmed by hand before being
+fixed.
+
+**1. Seven of ten settings were written, audited, persisted, and read by nothing.**
+`confirm_frames`, `dwell_ms`, `gate_bind_window_s`, both alert throttles, `voice_enabled` and
+`telegram_enabled` were all exposed on the Settings page and stored in `config_kv`, while the
+running code used module constants and default arguments. The page said "saved", the value
+survived a restart, `audit_log` recorded a `config_change` - and nothing changed.
+
+Two things made this worse than a dead control. The audit row asserted a change that did not
+happen, in a table whose whole purpose is to be trustworthy evidence. And it removed the
+tuning lever precisely during the week it was most needed: adjusting dwell or the gate binding
+window from the yard is exactly what field calibration consists of.
+
+Fixed by wiring the readers rather than deleting the controls, since the tuning is wanted.
+Values now flow through a small cache (`db/repositories/config.py`) with a 2 s TTL and explicit
+invalidation on write - which also removed an existing inefficiency, since the recognition
+thresholds had been fetched with a fresh query on every frame, about eighteen queries a second
+for values that change weekly.
+
+The deeper lesson, and the one for the report: **the original verification tested persistence
+and never tested effect.** The settings page was recorded as "built and verified" on the
+strength of a value surviving a restart. `tests/test_config_effect.py` now asserts behaviour
+change rather than storage.
+
+**2. `cards.h` was being mirrored to the corporate OneDrive drive.**
+The RFID card UIDs are excluded from git, with a comment saying why - a UID is a credential,
+and anyone who knows one can write it to a blank card. The backup script's exclude list did
+not cover it, and the script's own post-run leak check did not look for it either, so it
+copied the file and then reported success.
+
+Nothing had leaked yet: the mirrored copy was still the template. But beat 7 requires a real
+UID in that file before filming, and the next commit after that would have shipped a working
+gate credential to a school-managed drive while asserting all was well.
+
+This is the *second* instance of the same class of fault in this project, in the opposite
+direction: days earlier, a blanket `**/staff/` rule meant for biometric data silently swallowed
+a source file. Both are the same underlying error - a protection rule and the thing it protects
+drifting apart, with an automated check that did not actually cover the case. Fixed by
+excluding the file, extending the leak check to assert it, and re-running with
+`--delete-excluded` to purge the copy already sitting in OneDrive.
+
 ### Rotating credentials for the failover: considered and declined, 2026-09-07
 
 **Status: designed, not built - and the reasoning is the point.** Recorded in full because a

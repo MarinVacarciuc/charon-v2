@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.responses import Response
 
 from ..db.database import utcnow
-from ..db.repositories import audit
+from ..db.repositories import audit, config as config_repo
 from .auth import require_admin
 
 router = APIRouter()
@@ -61,6 +61,7 @@ async def set_config(request: Request):
                          (str(value), utcnow(), key))
         changed[key] = str(value)
     if changed:
+        config_repo.invalidate()   # take effect now, not up to the cache TTL later
         await audit.record(db, "config_change", ", ".join(f"{k}={v}" for k, v in changed.items()),
                            actor="admin")
     return {"ok": True, "changed": changed}

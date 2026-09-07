@@ -17,7 +17,7 @@ import cv2
 import numpy as np
 
 from ..db.database import Database, utcnow
-from ..db.repositories import audit, people, presence
+from ..db.repositories import audit, config, people, presence
 from ..push import events as ev
 from ..alerts.telegram import Telegram
 from ..alerts.voice import VoicePlayer
@@ -64,6 +64,12 @@ class BrainEvents:
         self._zone_states.clear()
         self._last_face_count.clear()
 
+    async def _voice_on(self) -> bool:
+        return await config.get_bool(self._db, "voice_enabled", True)
+
+    async def _tg_on(self) -> bool:
+        return await config.get_bool(self._db, "telegram_enabled", True)
+
     # ------------------------------------------------------------------ node health
 
     async def node_online(self, node: NodeLive) -> None:
@@ -88,11 +94,8 @@ class BrainEvents:
         rows = self._engine.detect(frame)
         if rows.shape[0] == 0:
             return []
-        sim_threshold = await self._db.fetch_value(
-            "SELECT value FROM config_kv WHERE key='sim_threshold'", default="0.45")
-        sim_margin = await self._db.fetch_value(
-            "SELECT value FROM config_kv WHERE key='sim_margin'", default="0.05")
-        threshold, margin_cfg = float(sim_threshold), float(sim_margin)
+        threshold = await config.get_float(self._db, "sim_threshold", 0.45)
+        margin_cfg = await config.get_float(self._db, "sim_margin", 0.05)
 
         pairs: list[tuple[FaceObservation, np.ndarray]] = []
         for row in rows:
@@ -127,7 +130,9 @@ class BrainEvents:
         # bare int where the signature expects the real shape.
         faces_now = [FaceObservation(None, False)] * self._last_face_count.get(node.node_id, 0)
         now = _now()
-        events = gate.process_passage(state, node.node_id, node.direction, faces_now, now)
+        bind_window = await config.get_float(self._db, "gate_bind_window_s", 3.0)
+        events = gate.process_passage(state, node.node_id, node.direction, faces_now, now,
+                                      bind_window_s=bind_window)
         for e in events:
             await self._apply_gate_event(node, e)
 
@@ -149,12 +154,17 @@ class BrainEvents:
 
     async def _process_gate_frame(self, node: NodeLive, faces: list[FaceObservation]) -> None:
         state = self._gate_states.setdefault(node.node_id, gate.GateNodeState())
+        # Applied per frame rather than only at construction, so changing it in Settings takes
+        # effect on a running system instead of at the next restart.
+        state.tracker.set_confirm_frames(await config.get_int(self._db, "confirm_frames", 3))
         now = _now()
 
         primary_id = faces[0].person_id if faces and faces[0].confident else None
         check = await self._policy_check_for(primary_id) if primary_id is not None else (lambda pid, now: (False, "UNKNOWN"))
 
-        events = gate.process_frame(state, node.node_id, faces, check, now)
+        bind_window = await config.get_float(self._db, "gate_bind_window_s", 3.0)
+        events = gate.process_frame(state, node.node_id, faces, check, now,
+                                    bind_window_s=bind_window)
         for e in events:
             await self._apply_gate_event(node, e)
 
@@ -170,7 +180,7 @@ class BrainEvents:
                                              node=node.node_id, person_id=e.person_id, granted=e.granted))
             # Beat 1: the spoken line lands on the DECISION, not on the passage, so the voice,
             # the green light and the phone all happen together as the person walks up.
-            if self._voice and node.direction == "in":
+            if self._voice and node.direction == "in" and await self._voice_on():
                 if e.granted:
                     self._voice.welcome(name)
                 else:
@@ -183,7 +193,7 @@ class BrainEvents:
             await audit.record(self._db, "entry", f"{name} entered via {node.node_id} (token {token})",
                                node_id=node.node_id, person_id=e.person_id)
             await self._hub.publish(ev.passage(node.node_id, "in", 0))
-            if self._tg and p and p.get("telegram_chat_id"):
+            if self._tg and p and p.get("telegram_chat_id") and await self._tg_on():
                 self._tg.entry_token(p["telegram_chat_id"], name, token)
             if was_already_in:
                 await audit.record(self._db, "concurrent_entry", f"{name} entered while already on-site",
@@ -248,7 +258,11 @@ class BrainEvents:
         candidate_ids = {f.person_id for f in faces if f.confident and f.person_id is not None}
         check = await self._zone_check_for(candidate_ids) if candidate_ids else (lambda pid, z, now: (False, "UNKNOWN"))
 
-        events = zones.process_frame(state, node.node_id, node.zone, faces, check, now)
+        events = zones.process_frame(
+            state, node.node_id, node.zone, faces, check, now,
+            dwell_s=await config.get_float(self._db, "dwell_ms", 2000.0) / 1000.0,
+            unknown_throttle_s=await config.get_float(self._db, "unknown_zone_throttle_s", 30.0),
+            wrong_zone_throttle_s=await config.get_float(self._db, "wrong_zone_throttle_s", 60.0))
         for e in events:
             await self._apply_zone_event(node, e)
 
@@ -271,9 +285,9 @@ class BrainEvents:
                                              node=node.node_id, zone=e.zone))
             # Beat 5 is deliberately loud on all three surfaces at once: the board, the
             # person's own phone, and the room.
-            if self._voice:
+            if self._voice and await self._voice_on():
                 self._voice.denied_zone(e.zone)
-            if self._tg and p and p.get("telegram_chat_id"):
+            if self._tg and p and p.get("telegram_chat_id") and await self._tg_on():
                 self._tg.wrong_zone(p["telegram_chat_id"], name, e.zone, e.reason)
 
         elif e.kind == "unknown_in_zone":
@@ -281,5 +295,5 @@ class BrainEvents:
                                severity="alert", node_id=node.node_id)
             await self._hub.publish(ev.alert("unknown_in_zone", f"unknown person in {e.zone}",
                                              node=node.node_id, zone=e.zone))
-            if self._voice:
+            if self._voice and await self._voice_on():
                 self._voice.unknown_in_zone()
