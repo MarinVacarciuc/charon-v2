@@ -129,6 +129,43 @@ Power both boards from the bank, serial monitor open at 9600.
 
 If all seven behave, Layer 3 is done and the last beat of the video is filmable.
 
+## 7. The failover journal
+
+Everything this board decides happens while the brain is unreachable, so none of it would
+otherwise be recoverable. The Uno keeps its own journal in EEPROM - 113 records, surviving
+power loss, no extra hardware.
+
+Serial commands at 9600:
+
+| Type | Does |
+|---|---|
+| `D` | dump the journal as CSV, oldest first |
+| `?` | how many records, and whether it has wrapped |
+| `CLEAR` | erase it (spelled out on purpose - not one keystroke) |
+
+When it fills, the oldest records are overwritten. That is the right trade here: you
+reconcile the outage happening *now*, and records from sessions long past are noise. The dump
+always reports whether wrapping happened, so a full journal is never mistaken for a complete
+one.
+
+To fold it into the brain's audit log afterwards:
+
+```bash
+cd ~/IdeaProjects/charon-v2/server
+.venv/bin/python tools/import_uno_log.py --port /dev/cu.usbmodemXXXX \
+  --outage-start "2026-09-14 14:32:00" --dry-run
+```
+
+Drop `--dry-run` to write. `--outage-start` is when the Uno booted or the outage began: the
+board has no clock, so its records are offsets in seconds, and this anchors them to real time.
+Without it the rows still import but are marked approximate rather than quietly pretending to
+be exact.
+
+This step is manual by design, not by omission. The Uno has no network, and its only
+neighbour with one is the gate ESP32 - on the far side of a one-way wire, and the very thing
+being killed in the demo. A genuinely independent backstop cannot report on itself; somebody
+has to go and collect it.
+
 ## Flashing
 
 ```bash

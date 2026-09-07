@@ -34,6 +34,7 @@
     does not.
 */
 #include <SPI.h>
+#include <EEPROM.h>
 #include <MFRC522.h>
 #include "cards.h"
 
@@ -81,6 +82,140 @@ unsigned long passUntil = 0, denyUntil = 0, buzzUntil = 0, lastPingMs = 0;
 unsigned long approachAt = 0;           // 0 = nobody currently waiting unidentified
 char lastUid[32] = "";
 unsigned long lastUidAt = 0;
+
+
+/* ------------------------------------------------------------------ failover journal
+
+   Everything this board decides happens while the brain is unreachable by definition, so
+   nothing it does would otherwise be recoverable afterwards. The journal is what turns
+   "the brain will never know who came in" into "the brain finds out at the next check".
+
+   EEPROM rather than an SD card, for a reason worth stating: the data has to be written by
+   the board that KNOWS the event, and that is this one - the card reader is here, not on the
+   ESP32. An SD card on the ESP32 would sit there recording nothing, because the ESP is on
+   the far side of a one-way wire and, in the demo's own scenario, is the thing being killed.
+   The Uno already has 1 KB of non-volatile storage built in, which is more than a hundred
+   records; no extra hardware, no extra pins, nothing more to solder or fail.
+
+   Timestamps are seconds since THIS BOARD booted, because it has no clock. That is honest and
+   sufficient: the brain knows when the outage began, and the offsets place the events inside
+   it.
+
+   A ring buffer: when it fills, the oldest records are overwritten. Reconciliation is about
+   the outage happening NOW, so the newest records are the ones worth keeping, and records
+   from sessions long past are noise. The dump reports that wrapping happened, so a full
+   journal is never mistaken for a complete one. */
+
+const uint16_t EE_MAGIC_ADDR = 0;      // 2 bytes: marks the journal as ours and initialised
+const uint16_t EE_HEAD_ADDR  = 2;      // 1 byte : next slot to write
+const uint16_t EE_FLAGS_ADDR = 3;      // 1 byte : bit0 = has wrapped at least once
+const uint16_t EE_DATA_ADDR  = 4;
+const uint16_t EE_MAGIC      = 0x4348; // 'CH'
+const uint8_t  REC_SIZE      = 9;      // 4 uid + 4 seconds + 1 outcome
+const uint8_t  EE_CAPACITY   = (uint8_t)((1024 - EE_DATA_ADDR) / REC_SIZE);
+
+const uint8_t OUT_GRANT   = 1;
+const uint8_t OUT_DENY    = 2;
+const uint8_t OUT_NO_CARD = 3;
+
+uint8_t journalHead = 0;      // next slot to write
+bool journalWrapped = false;  // the ring has been round at least once
+
+void journalReset() {
+  EEPROM.put(EE_MAGIC_ADDR, EE_MAGIC);
+  EEPROM.update(EE_HEAD_ADDR, 0);
+  EEPROM.update(EE_FLAGS_ADDR, 0);
+  journalHead = 0;
+  journalWrapped = false;
+}
+
+void journalLoad() {
+  uint16_t magic;
+  EEPROM.get(EE_MAGIC_ADDR, magic);
+  if (magic != EE_MAGIC) {              // a fresh chip reads 0xFFFF: initialise rather than
+    journalReset();                     // trusting whatever noise is in there
+    return;
+  }
+  journalHead = EEPROM.read(EE_HEAD_ADDR);
+  journalWrapped = EEPROM.read(EE_FLAGS_ADDR) & 0x01;
+  if (journalHead >= EE_CAPACITY) journalReset();   // corrupt index: start clean
+}
+
+uint8_t journalCount() {
+  return journalWrapped ? EE_CAPACITY : journalHead;
+}
+
+void journalWrite(const byte *uid, byte uidLen, uint8_t outcome, unsigned long now) {
+  uint16_t addr = EE_DATA_ADDR + (uint16_t)journalHead * REC_SIZE;
+  for (uint8_t i = 0; i < 4; i++)
+    EEPROM.update(addr + i, i < uidLen ? uid[i] : 0);   // update(), not write(): no needless
+  unsigned long secs = now / 1000UL;                     // cycles on bytes that did not change
+  EEPROM.put(addr + 4, secs);
+  EEPROM.update(addr + 8, outcome);
+
+  journalHead = (journalHead + 1) % EE_CAPACITY;
+  EEPROM.update(EE_HEAD_ADDR, journalHead);
+  if (journalHead == 0 && !journalWrapped) {
+    // Oldest records start being overwritten from here. Reconciliation cares about the
+    // CURRENT outage, so discarding the oldest is the right trade - but the dump has to say
+    // it happened, or a full journal reads as a complete one.
+    journalWrapped = true;
+    EEPROM.update(EE_FLAGS_ADDR, 0x01);
+    Serial.println(F("JOURNAL_WRAPPED,0,oldest records now being overwritten"));
+  }
+}
+
+void journalDump() {
+  // Plain CSV on the wire: readable by eye in a serial monitor and parsable by
+  // server/tools/import_uno_log.py without either end needing a library.
+  uint8_t n = journalCount();
+  Serial.print(F("JOURNAL_BEGIN,")); Serial.print(n);
+  Serial.print(F(",capacity=")); Serial.print(EE_CAPACITY);
+  Serial.print(F(",wrapped=")); Serial.println(journalWrapped ? 1 : 0);
+  Serial.println(F("uid,seconds_since_boot,outcome"));
+  // Oldest first. Once wrapped, the oldest surviving record is the one at the write head.
+  for (uint8_t k = 0; k < n; k++) {
+    uint8_t slot = journalWrapped ? (uint8_t)((journalHead + k) % EE_CAPACITY) : k;
+    uint16_t addr = EE_DATA_ADDR + (uint16_t)slot * REC_SIZE;
+    for (uint8_t b = 0; b < 4; b++) {
+      byte v = EEPROM.read(addr + b);
+      if (v < 0x10) Serial.print('0');
+      Serial.print(v, HEX);
+      if (b < 3) Serial.print(' ');
+    }
+    unsigned long secs; EEPROM.get(addr + 4, secs);
+    uint8_t outcome = EEPROM.read(addr + 8);
+    Serial.print(','); Serial.print(secs); Serial.print(',');
+    Serial.println(outcome == OUT_GRANT ? F("granted")
+                 : outcome == OUT_DENY  ? F("denied") : F("approach_no_card"));
+  }
+  Serial.println(F("JOURNAL_END"));
+}
+
+void journalSerialCommands() {
+  static char buf[8];
+  static uint8_t n = 0;
+  while (Serial.available()) {
+    char c = Serial.read();
+    if (c == '\n' || c == '\r') {
+      buf[n] = 0;
+      if (n) {
+        if (!strcmp(buf, "D")) journalDump();
+        else if (!strcmp(buf, "?")) {
+          Serial.print(F("JOURNAL_STATUS,")); Serial.print(journalCount());
+          Serial.print('/'); Serial.print(EE_CAPACITY);
+          Serial.print(F(",wrapped=")); Serial.println(journalWrapped ? 1 : 0);
+        }
+        // Spelled out rather than a single key: clearing a security journal by fat-fingering
+        // one character in a serial monitor is not a mistake worth making possible.
+        else if (!strcmp(buf, "CLEAR")) { journalReset(); Serial.println(F("JOURNAL_CLEARED,0,")); }
+      }
+      n = 0;
+    } else if (n < sizeof(buf) - 1) {
+      buf[n++] = c;
+    }
+  }
+}
 
 void onHeartbeat() {
   // An interrupt, not polling: loop() spends up to 25 ms inside pulseIn waiting for an echo,
@@ -139,6 +274,7 @@ const char *holderFor(const char *uid) {
 void grant(const char *holder, unsigned long now) {
   Serial.print(F("PASS,")); Serial.print(now);
   Serial.print(F(",card accepted: ")); Serial.println(holder);
+  journalWrite(rfid.uid.uidByte, rfid.uid.size, OUT_GRANT, now);
   passUntil = now + PASS_HOLD_MS;
   buzzUntil = now + BUZZ_MS;
   approachAt = 0;                        // identified: no unattended-approach record needed
@@ -149,6 +285,7 @@ void refuse(const char *uid, unsigned long now) {
   // number off the serial monitor, put it in cards.h.
   Serial.print(F("DENY,")); Serial.print(now);
   Serial.print(F(",card not on this board's list: ")); Serial.println(uid);
+  journalWrite(rfid.uid.uidByte, rfid.uid.size, OUT_DENY, now);
   denyUntil = now + DENY_HOLD_MS;
   buzzUntil = now + BUZZ_MS;
   approachAt = 0;
@@ -178,11 +315,17 @@ void setup() {
   Serial.print(F("[uno] MFRC522 version 0x")); Serial.println(v, HEX);
   if (v == 0x00 || v == 0xFF)
     Serial.println(F("[uno] WARNING: reader not responding - check SPI wiring and 3.3V supply"));
+  journalLoad();
+  Serial.print(F("[uno] failover journal: ")); Serial.print(journalCount());
+  Serial.print('/'); Serial.print(EE_CAPACITY);
+  Serial.println(journalWrapped ? F(" records (wrapped)") : F(" records"));
+  Serial.println(F("[uno] serial: D = dump journal, ? = status, CLEAR = erase"));
   Serial.println(F("[uno] state,millis,detail"));
 }
 
 void loop() {
   unsigned long now = millis();
+  journalSerialCommands();
   bool up = beatAge() < HB_TIMEOUT_MS;
 
   if (up != smartPathUp || !announced) {
@@ -221,6 +364,7 @@ void loop() {
   if (approachAt && (long)(now - approachAt - APPROACH_WAIT_MS) >= 0) {
     Serial.print(F("NO_CARD,")); Serial.print(now);
     Serial.println(F(",approach with no card presented"));
+    { byte none[4] = {0, 0, 0, 0}; journalWrite(none, 4, OUT_NO_CARD, now); }
     approachAt = 0;
   }
 

@@ -324,11 +324,23 @@ Costs, stated rather than buried:
 * **A card is clonable.** Anyone who learns a UID can write it to a blank card. That is the
   generic weakness of a possession factor, and it is why the UIDs live in a gitignored
   `cards.h` beside `secrets.h` rather than in the repository.
-* **Entry by card during an outage is invisible to the brain.** The heartbeat wire is
-  deliberately one-way (ESP32 to Uno), so when the brain recovers it has no idea anyone came
-  in. Reconciliation would need either a return wire or a manual check against the Uno's
-  serial log. This is the real price of an independent fallback: independence means it cannot
-  tell you what it did. Listed as designed-not-built.
+* **Entry by card during an outage is invisible to the brain until somebody collects the
+  journal.** Solved 2026-09-07, and the shape of the solution is the interesting part. Marin
+  first suggested an SD card in the gate ESP32; that would have recorded nothing, because the
+  card reader is on the *Uno*, and the ESP32 is both on the far side of a one-way wire and the
+  thing being killed in the demo's own scenario. The data was on the wrong side of the gap.
+  The Uno instead keeps a 113-record journal in its own EEPROM - no extra hardware, no extra
+  pins - and hands it over on request (`D` over serial), which `tools/import_uno_log.py` folds
+  into `audit_log` with the offsets anchored to real time.
+
+  The ring buffer overwrites the oldest records when full, at Marin's call and correctly:
+  reconciliation is about the outage happening now, and older sessions are noise. The dump
+  always reports that wrapping occurred, so a full journal is never read as a complete one.
+
+  What remains designed-not-built is *automatic* delivery, and deliberately so: the Uno has no
+  network, and giving it one through the ESP32 would reintroduce the dependency the whole
+  layer exists to avoid. A genuinely independent backstop cannot report on itself - somebody
+  has to go and collect it. That is a property of independence, not a gap in the build.
 * **If the reader fails, nobody gets in during an outage.** For an entry lane that is the
   correct posture, and it is more correct than what it replaced.
 
