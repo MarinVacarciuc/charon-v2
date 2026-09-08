@@ -352,6 +352,48 @@ still checks credentials" is a better thing to film than someone walking up to a
 opens for anybody, and tapping a card is a deliberate, legible action in a way that walking
 forward is not.
 
+### Recognition and rotation were blocking the shared event loop, 2026-09-08
+
+**Status: fixed, verified two ways.** Marin reported the dashboard's camera tiles looked
+"badly choppy - maybe one frame every few seconds" and asked how many. The honest answer:
+the boards were offline at the time (still being wired for the Uno work), so the exact figure
+he saw could not be reproduced live. What could be checked without hardware was whether the
+brain's own code was capable of causing exactly that symptom, and it was - a real deviation
+from `docs/BUILD_PLAN.md`'s own stated design ("inference goes to run_in_executor, the event
+loop is not blocked") that had not actually been implemented.
+
+`app/recognition/engine.py`'s `detect()` and `embed()` are OpenCV DNN forward passes - CPU-
+bound - and `app/nodes/frames.py`'s `rotate_jpeg()` does a decode/rotate/re-encode, also CPU-
+bound. Both were being called directly on the asyncio event loop, which is the ONE thread
+shared by all six nodes' polling loops and every HTTP response the server makes - including
+the dashboard's own tile fetches. Measured on this hardware with the real models: rotate
+~5.4 ms, detect ~11.6 ms, embed ~5.5 ms - about 22.5 ms of pure blocking per face, per frame,
+per camera-on node. For as long as that runs, nothing else on the server can proceed: not
+another node's poll, not a `/frame.jpg` response to a waiting browser tab.
+
+Fixed by moving all three (`rotate_jpeg`, `detect`, `embed`, and the JPEG decode in
+`events_sink.py`'s `frame()`) onto `loop.run_in_executor`, so they run on a thread pool
+instead of the event loop itself.
+
+Verified two ways, without needing the boards back up:
+
+1. **A direct before/after measurement of loop responsiveness.** A background coroutine ticks
+   as fast as `asyncio.sleep(0)` allows and records the gap between ticks - a blocked loop
+   shows up as one large gap. Calling `detect()` directly (the pre-fix code path): the ticker
+   froze for **16.6 ms**, matching the 16.5 ms `detect()` itself took - the loop was blocked
+   for the entire call. After the fix, running the real `BrainEvents.frame()` end to end
+   (decode + detect + embed, ~24.8 ms of real work): the largest gap was **1.9 ms** - the work
+   still happens, but the loop is free while it does.
+2. The full test suite (68 tests) still passes.
+
+**What this does not claim:** that this was the entire cause of what Marin saw. 22.5 ms per
+node, even across six nodes worst-case, sums to roughly 135 ms - real, and now removed, but
+not obviously enough on its own to produce multi-second gaps on a single tile. A second,
+independently measured cause already on record (2026-09-03) is WiFi airtime contention when
+several nodes are clustered with cameras simultaneously awake, which produced spikes up to
+2.1 s in that earlier test. Both are real; which dominates what Marin actually saw needs a
+live measurement once the boards are back up; noted as the next thing to check, not asserted.
+
 ### Loopback exempt from the admin token, 2026-09-07
 
 **Status: built, confirmed with Marin before implementing.** After the mobile fixes above, he

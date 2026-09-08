@@ -196,7 +196,12 @@ class NodePoller:
             if code == 200 and jpeg[:2] == b"\xff\xd8":
                 # Correct orientation here, once, so everything downstream - recognition and
                 # every dashboard tile alike - works from an upright frame. See frames.py.
-                jpeg = rotate_jpeg(jpeg, self.live.rotation_deg)
+                # Off the event loop: imdecode/rotate/imencode are CPU-bound, and this loop is
+                # shared by all six nodes' pollers plus every HTTP response (the dashboard's
+                # own tile fetches included) - blocking it here delays all of them, not just
+                # this node's own next tick.
+                loop = asyncio.get_running_loop()
+                jpeg = await loop.run_in_executor(None, rotate_jpeg, jpeg, self.live.rotation_deg)
                 self.live.last_frame = jpeg
                 self.live.last_frame_at = time.monotonic()
                 await self._events.frame(self.live, jpeg)

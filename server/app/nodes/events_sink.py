@@ -10,6 +10,7 @@ tests and no camera.
 """
 from __future__ import annotations
 
+import asyncio
 import datetime as dt
 import logging
 
@@ -90,8 +91,17 @@ class BrainEvents:
     async def _observe_faces(self, frame: np.ndarray) -> list[tuple[FaceObservation, np.ndarray]]:
         """Every face this frame, largest first, each paired with its raw detection row (the
         row is needed by nothing downstream yet, but keeping it available avoids re-detecting
-        if a future caller needs the box/landmarks)."""
-        rows = self._engine.detect(frame)
+        if a future caller needs the box/landmarks).
+
+        detect()/embed() are OpenCV DNN forward passes - CPU-bound, measured at ~12 ms and
+        ~6 ms each on this hardware - and this ran on the bare event loop until 2026-09-08.
+        That loop is shared by all six nodes' pollers and every HTTP response, dashboard tiles
+        included, so ~20 ms of blocking work per face, per frame, per camera-on node was
+        delaying all of them, not just this node's own next tick. Both now run in the default
+        executor.
+        """
+        loop = asyncio.get_running_loop()
+        rows = await loop.run_in_executor(None, self._engine.detect, frame)
         if rows.shape[0] == 0:
             return []
         threshold = await config.get_float(self._db, "sim_threshold", 0.45)
@@ -99,9 +109,9 @@ class BrainEvents:
 
         pairs: list[tuple[FaceObservation, np.ndarray]] = []
         for row in rows:
-            vec = self._engine.embed(frame, row)
-            c = self._engine.recognise(vec)
-            confident = is_confident_match(c, threshold=threshold, margin=margin_cfg)
+            vec = await loop.run_in_executor(None, self._engine.embed, frame, row)
+            c = self._engine.recognise(vec)  # plain numpy dot products over a small roster -
+            confident = is_confident_match(c, threshold=threshold, margin=margin_cfg)  # cheap enough to stay on the loop
             area = float(row[2]) * float(row[3])
             pairs.append((FaceObservation(person_id=c.person_id if confident else None,
                                           confident=confident, area=area), row))
@@ -109,7 +119,8 @@ class BrainEvents:
         return pairs
 
     async def frame(self, node: NodeLive, jpeg: bytes) -> None:
-        frame = _decode(jpeg)
+        loop = asyncio.get_running_loop()
+        frame = await loop.run_in_executor(None, _decode, jpeg)
         if frame is None:
             return
         pairs = await self._observe_faces(frame)
