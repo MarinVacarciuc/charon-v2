@@ -18,6 +18,7 @@ Two things this module deliberately does NOT do, both on purpose:
 """
 from __future__ import annotations
 
+import threading
 from dataclasses import dataclass
 
 import cv2
@@ -67,14 +68,32 @@ class RecognitionEngine:
         # 56-embedding corpus scanned in well under a millisecond.
         self._samples: dict[int, list[np.ndarray]] = {}
 
+        # One lock around everything that touches the two cv2 objects above, and around the
+        # roster dict.
+        #
+        # Until 2026-09-08 recognition ran directly on the event loop, so it was serialised by
+        # accident and therefore safe by accident. Moving it to run_in_executor to unblock the
+        # loop removed that accident: six poller tasks can now be inside detect() at the same
+        # moment, on one shared OpenCV DNN net, which OpenCV does not promise is safe. detect()
+        # is worse than a single call - setInputSize() and detect() are two steps, so two
+        # threads holding differently-sized frames can interleave and have one of them detect
+        # at the other's dimensions.
+        #
+        # Serialising costs nothing that was actually wanted. The goal of the executor change
+        # was to keep the EVENT LOOP free, not to run inference in parallel; the loop stays
+        # free either way, and the measured 1.9 ms worst-case loop gap is unaffected.
+        self._cv_lock = threading.RLock()
+
     # ------------------------------------------------------------------ detection / embedding
 
     def detect(self, frame: np.ndarray) -> np.ndarray:
         """Every face YuNet finds. Shape (n, 15): x,y,w,h, 5 landmark (x,y) pairs, score.
         Empty array (not None) when nothing is found, so callers never need a None check."""
         h, w = frame.shape[:2]
-        self._detector.setInputSize((w, h))
-        _, faces = self._detector.detect(frame)
+        with self._cv_lock:
+            # setInputSize and detect must not be separable by another thread - see __init__.
+            self._detector.setInputSize((w, h))
+            _, faces = self._detector.detect(frame)
         if faces is None:
             return np.empty((0, 15), dtype=np.float32)
         return faces
@@ -82,27 +101,38 @@ class RecognitionEngine:
     def embed(self, frame: np.ndarray, face_row: np.ndarray) -> np.ndarray:
         """One face's embedding: aligned via YuNet's landmarks, L2-normalised so that cosine
         similarity is a plain dot product everywhere downstream."""
-        aligned = self._recognizer.alignCrop(frame, face_row)
-        feat = self._recognizer.feature(aligned).flatten().astype(np.float32)
+        with self._cv_lock:
+            aligned = self._recognizer.alignCrop(frame, face_row)
+            feat = self._recognizer.feature(aligned).flatten().astype(np.float32)
         norm = np.linalg.norm(feat)
         return feat / norm if norm > 0 else feat
 
     # ------------------------------------------------------------------ the enrolled roster
 
+    # The roster is read from executor threads (recognise, during a frame) and written from
+    # the event loop (enrolment, deletion), so it takes the same lock. Without it, an enrolment
+    # landing mid-frame can resize the dict while recognise() is iterating it, which raises
+    # "dictionary changed size during iteration" - and that exception would surface as a node
+    # dropping out, not as anything that points at enrolment.
+
     def load_samples(self, by_person: dict[int, list[np.ndarray]]) -> None:
         """Replace the whole in-memory roster - called once at startup, and again after any
         enrolment so a newly-added person is recognised on the very next frame."""
-        self._samples = by_person
+        with self._cv_lock:
+            self._samples = by_person
 
     def add_sample(self, person_id: int, vec: np.ndarray) -> None:
-        self._samples.setdefault(person_id, []).append(vec)
+        with self._cv_lock:
+            self._samples.setdefault(person_id, []).append(vec)
 
     def sample_count(self, person_id: int) -> int:
-        return len(self._samples.get(person_id, []))
+        with self._cv_lock:
+            return len(self._samples.get(person_id, []))
 
     @property
     def enrolled_people(self) -> int:
-        return len(self._samples)
+        with self._cv_lock:
+            return len(self._samples)
 
     # ------------------------------------------------------------------ matching
 
@@ -111,13 +141,16 @@ class RecognitionEngine:
         taking the max - not the best single sample across the whole roster, which is what
         let one poor enrolment sample win outright in the old build (no per-person
         aggregation at all: `recognise()` there returned the winning SAMPLE's label)."""
-        if not self._samples:
+        with self._cv_lock:
+            # Snapshot under the lock, score outside it: the dot products are the slow part and
+            # do not need to hold up an enrolment, but iterating the live dict does.
+            roster = [(pid, list(samples)) for pid, samples in self._samples.items() if samples]
+
+        if not roster:
             return Candidate(person_id=None, score=0.0, margin=0.0)
 
         best_per_person: list[tuple[int, float]] = []
-        for pid, samples in self._samples.items():
-            if not samples:
-                continue
+        for pid, samples in roster:
             best = max(float(np.dot(vec, s)) for s in samples)
             best_per_person.append((pid, best))
 

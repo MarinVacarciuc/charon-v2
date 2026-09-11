@@ -352,6 +352,56 @@ still checks credentials" is a better thing to film than someone walking up to a
 opens for anybody, and tapping a card is a deliberate, legible action in a way that walking
 forward is not.
 
+### Pre-shoot adversarial review: seven defects found and fixed, 2026-09-11
+
+**Status: all seven fixed, with regression tests.** Worth recording as much for how the review
+behaved as for what it found.
+
+**The review itself failed twice.** A multi-agent adversarial pass was run on 2026-09-07 (five
+reviewers, one skeptic per finding - 70 agents) and hit a session limit with 61 of 70 agents
+dead. A leaner re-run on 2026-09-10 (five reviewers, one skeptic per dimension - 10 agents)
+hit the limit again, completing 3 of 8. Its summary read "18 raised, 18 refuted", which was an
+artifact of the script counting an unverified finding as unconfirmed: they were not refuted,
+they were never examined. Worth naming, because a review that reports zero findings because it
+died is indistinguishable from one that reports zero findings because the code is clean.
+
+The 18 findings were then verified by hand against the code. Three were raised independently
+by two different reviewers, which turned out to be a good signal - all three were real.
+
+| # | Defect | Consequence |
+|---|---|---|
+| 1 | Shared cv2 DNN objects called from six executor threads | crash or corrupted detection mid-take |
+| 2 | Policy compared local-meaning hours against a UTC clock | every window an hour out |
+| 3 | `denied_crossed` never consumed the pending decision | alert storm, repeated token issue |
+| 4 | Entry did not clear `at_zone_id`; zones written for off-site people | beat 3 pre-empted |
+| 5 | An empty hours field raised into an endless restart loop | one cleared field kills a node |
+| 6 | Telegram tasks held only weakly by asyncio | messages silently vanish |
+| 7 | Poller's frame block caught only network errors | our own bugs restart-looped the node |
+
+Two deserve the detail.
+
+**Defect 1 was caused by the 2026-09-08 fix in these same notes.** Moving recognition to
+`run_in_executor` unblocked the event loop, and in doing so removed the accidental
+serialisation that had been keeping one shared `FaceDetectorYN` safe. Six pollers can now be
+inside `detect()` simultaneously, and `detect()` is two steps - `setInputSize()` then
+`detect()` - so two threads with differently-sized frames can interleave and have one detect
+at the other's dimensions. Fixed with one lock around the cv2 objects and the roster. This
+costs nothing that was wanted: the goal was a free event loop, not parallel inference, and the
+measured 1.9 ms worst-case loop gap is unaffected. A fix creating the next defect is worth
+noting honestly rather than presenting the sequence as steady progress.
+
+**Defect 2 is the one that would have been blamed on the wrong thing.** Everything is stored
+in UTC, correctly. But `hours_from`/`hours_to` are typed into the Staff page by a person who
+means local time, and they were being compared against a UTC clock. In BST that is an hour:
+at 22:15 local the system believed it was 21:15. The Cleaner beat (18:00-20:00) would have
+admitted at 20:30 local while the beat calls for a refusal - and on camera that reads as "the
+policy engine is broken", not as a timezone bug. The 19 policy tests never caught it because
+they pass explicit `datetime` objects; the defect was in the caller, not in `policy.py`.
+Storage stays UTC; only the comparison moved, to `policy.policy_now()`.
+
+Six regression tests added (`tests/test_review_regressions.py`), each failing against the code
+as it stood that morning. Suite: 74 tests, all passing, server verified to boot and serve.
+
 ### Recognition and rotation were blocking the shared event loop, 2026-09-08
 
 **Status: fixed, verified two ways.** Marin reported the dashboard's camera tiles looked

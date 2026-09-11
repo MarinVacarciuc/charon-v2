@@ -36,9 +36,10 @@ def _decode(jpeg: bytes) -> np.ndarray | None:
 
 
 def _now() -> dt.datetime:
-    # Same textual format as everywhere else in the DB, parsed back to a real datetime for
-    # policy.py's comparisons - one clock, one format, no separate "wall clock" helper.
-    return dt.datetime.strptime(utcnow(), "%Y-%m-%d %H:%M:%S")
+    # LOCAL time, not UTC. Hours windows are typed by a person who means local time, so that
+    # is the clock the decision has to be made against - see policy.policy_now(). Storage
+    # stays UTC everywhere; only the comparison is local.
+    return policy.policy_now()
 
 
 class BrainEvents:
@@ -279,9 +280,15 @@ class BrainEvents:
 
     async def _apply_zone_event(self, node: NodeLive, e: zones.ZoneEvent) -> None:
         if e.kind == "zone_update":
-            await presence.set_zone(self._db, e.person_id, e.zone)
             p = await people.get_by_id(self._db, e.person_id)
-            name = p["name"] if p else "unknown"
+            # Only people who are actually on site can be in a zone. Without this a camera
+            # recognising someone through a window, or before they reach the gate, writes a
+            # zone for an off-site person - which then survives their entry and shows them
+            # in a room they never walked into.
+            if not p or p.get("presence") != "in":
+                return
+            name = p["name"]
+            await presence.set_zone(self._db, e.person_id, e.zone)
             await audit.record(self._db, "zone_update", f"{name} -> {e.zone}",
                                node_id=node.node_id, person_id=e.person_id)
             await self._hub.publish(ev.node_status(node.node_id, online=True, cam_on=node.cam_on,

@@ -6,6 +6,7 @@ tested here is the pure arithmetic: aggregation and the confidence decision.
 from __future__ import annotations
 
 import sys
+import threading
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -25,6 +26,10 @@ def unit(*coords) -> np.ndarray:
 def _engine_with(samples: dict[int, list[np.ndarray]]) -> RecognitionEngine:
     e = object.__new__(RecognitionEngine)  # skip __init__: no model files needed for matching-only tests
     e._samples = {}
+    # __init__ is skipped, so the roster lock has to be supplied by hand. The matching path
+    # takes it on every call (added 2026-09-11, when recognition moved onto executor threads
+    # and the shared roster stopped being serialised by the event loop).
+    e._cv_lock = threading.RLock()
     e.load_samples(samples)
     return e
 

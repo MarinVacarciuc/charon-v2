@@ -27,6 +27,7 @@ class Telegram:
         self._token = token
         self._session = session
         self._enabled = enabled and bool(token)
+        self._inflight: set[asyncio.Task] = set()
         if not self._enabled:
             log.info("telegram disabled (no token configured)")
 
@@ -34,7 +35,12 @@ class Telegram:
         """Queue a message. Returns immediately; never raises into the caller."""
         if not self._enabled or not chat_id:
             return
-        asyncio.create_task(self._send(chat_id, text))
+        # Hold a reference until it finishes. asyncio only keeps a WEAK reference to a running
+        # task, so a bare create_task() can be garbage-collected mid-flight - the message then
+        # simply never arrives, with nothing logged. That is the phone half of beats 1 and 5.
+        task = asyncio.create_task(self._send(chat_id, text))
+        self._inflight.add(task)
+        task.add_done_callback(self._inflight.discard)
 
     async def _send(self, chat_id: str, text: str) -> None:
         try:

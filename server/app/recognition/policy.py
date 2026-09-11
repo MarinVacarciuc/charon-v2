@@ -22,7 +22,29 @@ the code that fixes it:
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import date, datetime, time
+from datetime import date, datetime, time, timezone
+
+
+def policy_now() -> datetime:
+    """The wall-clock time policy reasons about: LOCAL, naive.
+
+    Everything is STORED in UTC - audit rows, entry_time - because UTC is unambiguous and
+    sorts correctly. But `hours_from`/`hours_to` are typed into the Staff page by a person who
+    means local time, and `valid_until` is a local calendar date. Comparing those against a
+    UTC clock is wrong by the current offset, silently: in BST it made every window an hour
+    early, so a Cleaner restricted to 18:00-20:00 was still being admitted at 20:30 local.
+    Nothing failed loudly; the decision was simply wrong.
+
+    Storage stays UTC. Only the comparison moves, and it moves here, once.
+    """
+    return datetime.now(timezone.utc).astimezone().replace(tzinfo=None)
+
+
+def to_policy_time(utc_text: str) -> datetime:
+    """A stored UTC timestamp ("%Y-%m-%d %H:%M:%S") as local naive time, so it can be compared
+    against the same clock policy_now() returns."""
+    naive_utc = datetime.strptime(utc_text, "%Y-%m-%d %H:%M:%S")
+    return naive_utc.replace(tzinfo=timezone.utc).astimezone().replace(tzinfo=None)
 
 
 class Denial:

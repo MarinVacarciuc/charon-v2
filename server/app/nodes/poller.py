@@ -212,6 +212,13 @@ class NodePoller:
             # A frame we could not fetch is not a node we cannot reach: /status just answered.
             # Keep the last good frame and try again next tick.
             log.debug("node %s: frame fetch failed (%s), keeping last frame", node_id, exc)
+        except Exception:  # noqa: BLE001
+            # Anything from OUR side of the frame - recognition, gate/zone logic, a database
+            # write - is a bug in this program, not a dead node. Letting it escape reached the
+            # supervisor, which restarts the task after 2s; for a deterministic fault (one bad
+            # row in `people`, say) that is an endless restart loop and the node never polls
+            # again. Same split as block 2: the node stays online, we log and carry on.
+            log.exception("node %s: frame processing failed (node stays online)", node_id)
 
     async def run(self) -> None:
         """Poll forever at a steady cadence, correcting for how long each pass took."""

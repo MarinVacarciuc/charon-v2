@@ -30,9 +30,14 @@ async def commit_entry(db: Database, person_id: int) -> tuple[str, bool]:
     row = await db.fetch_one("SELECT presence FROM people WHERE id = ?", (person_id,))
     was_already_in = bool(row and row["presence"] == "in")
     token = new_session_token()
+    # at_zone_id is cleared deliberately: entering puts you on site, NOT in a zone. A zone
+    # camera that saw someone before they entered would otherwise leave a stale zone behind,
+    # and the board would show them already inside a room the instant they crossed the gate -
+    # which is exactly the transition the Reception camera is supposed to make happen.
     await db.execute(
         """
-        UPDATE people SET presence = 'in', session_token = ?, entry_time = ?, updated_at = ?
+        UPDATE people SET presence = 'in', session_token = ?, entry_time = ?,
+                          at_zone_id = NULL, updated_at = ?
         WHERE id = ?
         """,
         (token, utcnow(), utcnow(), person_id),

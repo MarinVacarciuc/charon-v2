@@ -46,7 +46,10 @@ class OverstayWatch:
     async def sweep(self) -> None:
         grace = int(float(await self._db.fetch_value(
             "SELECT value FROM config_kv WHERE key='overstay_grace_min'", default="5")))
-        now = dt.datetime.strptime(utcnow(), "%Y-%m-%d %H:%M:%S")
+        # Local, for the same reason as the gate: overstay_deadline() combines the entry
+        # moment with the person's hours_to, which is a local wall-clock time. Comparing a
+        # UTC clock against it put every deadline out by the current offset.
+        now = policy.policy_now()
 
         rows = await self._db.fetch_all(
             "SELECT id, name, entry_time, overstay_alerted_at FROM people "
@@ -55,7 +58,7 @@ class OverstayWatch:
             if row["overstay_alerted_at"]:
                 continue  # one alert per stay; cleared on exit and on a take reset
             try:
-                entry = dt.datetime.strptime(row["entry_time"], "%Y-%m-%d %H:%M:%S")
+                entry = policy.to_policy_time(row["entry_time"])   # stored UTC -> local
             except ValueError:
                 continue
 

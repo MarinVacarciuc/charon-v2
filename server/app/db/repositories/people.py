@@ -72,9 +72,20 @@ from datetime import date as _date, datetime as _datetime, time as _time  # noqa
 from ...recognition import policy as _policy  # noqa: E402
 
 
-def _parse_time(s: str) -> _time:
-    h, m = s.split(":")
-    return _time(int(h), int(m))
+def _parse_time(s: str, fallback: _time) -> _time:
+    """Parse "HH:MM", falling back rather than raising.
+
+    An empty or malformed value is reachable from the Staff page by clearing a time field, and
+    it used to raise straight out of load_policy_person - through the frame pipeline, past the
+    poller's network-only handler, into the supervisor, which restarted the task every 2s
+    forever, because the bad row is still there on the next attempt. One cleared field took a
+    node off the air permanently. A person with no usable hours is treated as unrestricted for
+    that bound, which is also what the column defaults say."""
+    try:
+        h, m = s.split(":")
+        return _time(int(h), int(m))
+    except (ValueError, AttributeError):
+        return fallback
 
 
 def _parse_date(s: str) -> _date | None:
@@ -123,8 +134,8 @@ async def load_policy_person(db: Database, person_id: int) -> _policy.Person | N
         name=row["name"],
         role=row["role_name"],
         status=row["status"],
-        hours_from=_parse_time(row["hours_from"]),
-        hours_to=_parse_time(row["hours_to"]),
+        hours_from=_parse_time(row["hours_from"], _time(0, 0)),
+        hours_to=_parse_time(row["hours_to"], _time(23, 59)),
         valid_until=_parse_date(row["valid_until"]),
         access_until=_parse_datetime(row["access_until"]),
         max_hours=row["max_hours"],

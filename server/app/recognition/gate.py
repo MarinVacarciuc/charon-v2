@@ -112,6 +112,11 @@ def process_passage(state: GateNodeState, node_id: str, direction: str,
         # this at all - a denied entry just sat un-audited past the initial refusal.
         events.append(GateEvent(kind="denied_crossed", node_id=node_id, person_id=pending.person_id,
                                 reason=pending.reason))
+        # Consumed, exactly like a granted entry. Leaving it standing meant a refused person
+        # who stayed in frame kept the decision alive (process_frame refreshes decided_at while
+        # they are still recognised), so EVERY later passage tick re-fired the same alert and
+        # re-issued a session token. One crossing is one event.
+        state.pending = None
         return events
 
     # Exit is fail-safe by design: no policy gate on the way out, ever - only whether we know
