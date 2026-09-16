@@ -11,12 +11,12 @@ received and specific changes made to the system as a result of the feedback rec
 polished final build is worth P4 and no more.
 
 **This is one system, not two.** Iterations 1-4 were built on an Arduino Uno because that is the
-brief's mandatory starting point (P5). Iteration 5 is not a separate, parallel project presented
-alongside the Arduino work for comparison - it is what the Uno line grew into once its own limits
-were reached. The Uno was left behind deliberately, for a stated reason (below), and everything it
-could not do is exactly what iteration 5 exists to do. The demonstration and the report should both
-tell this as a single continuous line: four iterations on the required hardware, then a fifth that
-moved off it once the requirement had been met and outgrown.
+brief's mandatory starting point (P5). Iterations 5-8 are not a separate, parallel project presented
+alongside the Arduino work for comparison - they are what the Uno line grew into once its own limits
+were reached, on ESP32 hardware, and every one of them is a real, dated change driven by a real
+limitation or a real defect found - not a reconstruction. The demonstration and the report should
+both tell this as a single continuous line: four iterations on the required hardware, then four more
+that moved off it once the requirement had been met and outgrown.
 
 **Correction (14.09.2026):** an earlier draft of this file invented its own three-step story for the
 Arduino stage (bare detection, then a buzzer, then LEDs) as a stand-in for a real one. That is no
@@ -197,7 +197,8 @@ presented as "the" iteration 4 in the same document - it invites the question of
 
 **Source:** this project's own build, and a deliberate departure from the Uno line rather than
 another sketch in it. This is real hardware, not a Wokwi simulation: six ESP32-S3-WROOM-1 boards,
-each with an OV5640 camera, built and wired for this project.
+each with an OV5640 camera, built and wired for this project, live and verified against a real
+person on 03.09.2026.
 **Built:** each node runs face detection and recognition (YuNet for detection, SFace for 128-d
 embeddings, cosine similarity against enrolled staff) and reports to a FastAPI "brain" server that
 holds the roster, the role/zone model (Guard, Worker, Visitor, Admin, IT across Reception,
@@ -210,6 +211,17 @@ knows the code", needs a camera and enough processing power to run a recognition
 time - an 8-bit microcontroller with 2 KB of RAM cannot do this at all, not slowly, not
 inconveniently, not at all. So the move to ESP32 is not scope creep; it is the direct, necessary
 consequence of the limitation named at the end of iteration 4.
+
+**Even the design of this iteration was corrected once before it was built.** The first proposal
+(this project's own `DEMO_ARCHITECTURE` document) had a camera alone decide entry and exit. That was
+rejected before a line of code was written: *"на воротах на вход/выход всё-таки считать что человек
+вошёл, если прошёл мимо ультразвуковых сенсоров"* - at the gate, count someone as having actually
+entered or exited only if they physically passed the ultrasonic sensors, not merely because a camera
+recognised a face nearby. What got built instead is two separate signals that both have to agree:
+recognition names someone and proposes a decision, but presence only commits when the passage
+sensor's own counter increments. This is worth stating as its own micro-iteration because it shows
+the pattern below repeating one level up: a design was proposed, a real limitation was named before
+it shipped, and the design changed in response, exactly like iterations 1 through 4.
 
 **What it does that iteration 4 could not:**
 - **Individual accountability.** The audit log names a person, not "a valid code". One compromised
@@ -229,22 +241,12 @@ Systems One through Four ever had to think about this, because none of them stor
 person. Iteration 5 does, and the report's LO4 discussion exists largely because of this exact
 trade.
 
-**The same structural problem Systems One-Three had, now measured on real hardware:** presence-only
-detection does not survive contact with a real doorway. The ultrasonic passage sensor on the live
-ESP32 gate logged **3,710 `unidentified_passage` events** across three days of testing (22 on
-03.09, 1,293 on 07.09, 2,395 on 08.09), against genuine traffic on the busiest of those days of:
-
-| 08.09.2026 | Count |
-|---|---|
-| `unidentified_passage` (sensor fired, nobody identified) | 2,395 |
-| `entry` (a real person actually went in) | 7 |
-| `exit` (a real person actually went out) | 3 |
-
-Roughly 240 sensor events for every real movement. Systems One through Three predicted this in
-principle (an ultrasonic trigger cannot distinguish a person from anything else that crosses it);
-iteration 5 is where it was actually measured, on the same class of sensor, at a much larger scale
-than a benchtop test could show. This is the throughline the demonstration should make explicit:
-the Uno builds diagnosed the disease, the ESP32 build is where its full size became visible.
+**Two real problems surfaced on the same day it first went live, and were fixed the same day:**
+camera frames were arriving upside down on some nodes (the per-node rotation setting was already
+stored but nothing ever applied it - fixed by actually reading it), and the server was reachable
+only from the machine running it (bound to `127.0.0.1`) until it was rebound to `0.0.0.0` so it could
+be reached from a phone on the same network. Small fixes, but genuine same-day, feedback-driven
+ones, not designed in advance.
 
 **Tester reaction (guard/staff role):** recognising a face is one less thing to remember or leak - no
 PIN to forget, share or have shoulder-surfed - and the welcome-by-name experience read as
@@ -254,13 +256,188 @@ report's discussion of the 19% real-world accuracy figure from the Metropolitan 
 facial recognition trials (Fussey and Murray, 2019) - the same technology family, with a published,
 sobering failure rate.
 
-**This file stops here on purpose.** Iteration 5 itself went through further, smaller iterations
-after it was first built (the camera's power/wake model changed on 13.09.2026, for a stated
-measured reason; gate and zone logic were each revised at least once) - that history belongs to
-`docs/REPORT_NOTES.md` and the project's own commit history, not duplicated here. This file's job is
-the arc from a bare ultrasonic buzzer to a named face at a door; the fine-grained engineering
-history of the ESP32 build once it existed is recorded where the rest of that build's evidence
-already lives.
+**Change it caused:** a working recognition system immediately raises the question of what happens
+when it, or the network it depends on, fails outright - and what an intruder does with a shared
+building once they realise a camera is what stands between them and the door. → iteration 6.
+
+---
+
+## Iteration 6 - the failover layer, and a design considered and declined
+
+**Source:** this project's own build, 07.09.2026.
+**Built:** a second Arduino Uno, wired as a standalone watchdog with an RFID reader and its own
+EEPROM ring-buffer journal. It listens for a 1 Hz heartbeat from the ESP32 gate; if that heartbeat
+stops (the gate's ESP32 dies, loses WiFi, or the brain itself dies), the Uno wakes and grants entry
+on a known RFID card instead of a face, logging every such entry into a ring buffer in its own
+EEPROM. When the smart system recovers, the brain imports that journal and only then erases it -
+never before the import is confirmed, so a second failure mid-import cannot lose the record.
+
+**Why this is not "iteration 4's keypad again":** it is tempting to see a second Uno with a
+credential reader and assume it duplicates iteration 4. It does not - iteration 4 is the primary,
+everyday access path; this Uno is a *last resort* that exists only when everything smarter than it
+has already failed, and its one design requirement is having no dependency that could fail alongside
+whatever it is standing in for.
+
+**The idea proposed, and the reasoning for declining it:** the original instinct was to do better
+than a static RFID card, which is clonable by anyone who learns its ID. The proposal on the table -
+one-time codes sent to staff phones via Telegram whenever the smart system was healthy, pre-loaded
+onto the Uno, rotating on every recovery - was recorded and evaluated seriously, not dismissed. It
+fails for a reason that generalises: it depends on the very thing that is expected to have failed.
+Of the three failures the layer exists for (the gate ESP32 dies, it loses WiFi, or the brain dies),
+the brain dying is exactly the case with nobody left to send a code, and a recipient's phone needs
+working network to receive one regardless. **Decision: keep RFID.** Rotation is the right thing to
+want and the wrong thing to buy at the cost of the one property - needing no network, no internet,
+no charged phone, no delivery - that makes a last line of defence trustworthy. Recorded in full in
+`docs/REPORT_NOTES.md` because a rejected design with a stated reason is stronger D-level evidence
+than a list of what shipped.
+
+**What was corrected by real feedback on this same design:** the ring buffer's overflow behaviour
+was originally going to stop recording once full. The actual instruction was the opposite - *"при
+переполнениии пусть стирает старые записи"* (when it fills up, overwrite the oldest records) -
+because reconciliation only ever cares about the outage that just happened, not a history of every
+outage the journal has ever seen. Built the ring buffer that way, not the other way.
+
+**Tester reaction (guard role):** a fallback that still recognises a physical card, the thing every
+guard already carries for a dozen other doors, was the reassuring part - not a new procedure to
+remember for the one night a year it might matter.
+
+**Known limitation, named rather than hidden:** the Uno's card list is a mirror of who currently
+holds a valid card, hand-compiled rather than synced live, so it goes stale the moment someone's
+access is revoked on the brain and nobody remembers to update the Uno too. This is recorded as a
+limitation of the failover layer specifically, distinct from anything iterations 1-5 had to deal
+with, because none of them had a second, disconnected store of the same information to fall out of
+sync with.
+
+**Change it caused:** having just made a real access decision (`require_admin`) harder to bypass by
+accident everywhere else, the same day's testing found it had also made the one place it should not
+apply - enrolling a person while sitting at the machine itself - annoyingly strict. → iteration 7.
+
+---
+
+## Iteration 7 - fixing the friction real use exposed
+
+**Source:** this project's own build, 07.09.2026 (the same day as iteration 6, a different theme).
+
+Two separate, real complaints, both fixed the day they were raised, both about how the system
+behaves for the person actually operating it rather than about detection or security:
+
+**"I tried to enrol today and it didn't work - it asked for the admin token."** Every mutating route
+had correctly been put behind a shared admin token after A7 (admin authentication) was addressed,
+which is the right default - but it made enrolling a person from the same Mac the server runs on
+needlessly ceremonial, since anyone who can already reach that machine's `127.0.0.1` can read its
+`.env` file or kill the process directly; a token prompt there adds friction, not protection. The
+fix, confirmed explicitly rather than assumed: *"делай чтобы если открыл адрес страницы енрола, смог
+енролить там. мне для презентации этого хватит."* Requests from `127.0.0.1` specifically (verified
+by testing to be genuinely different from "anything on this Mac's LAN address", which arrives with a
+different source address) are exempt; everything else still needs the token.
+
+**A pre-shoot review the same day found two further real defects**, both small, both real: a dead
+settings value that had no effect no matter what it was set to, and a credential file that had
+leaked into a place the repository's own `.gitignore` should have caught. Both fixed and both worth
+naming, because a habit of checking your own work for defects before a deadline, not only when a
+user reports one, is itself part of the iteration story this file exists to tell.
+
+**Tester reaction (operator role):** "enrol without a dance with a tambourine" was the literal
+standard set for this fix, and it is the one this iteration is measured against - one click, from
+the Mac, no prompt.
+
+**Change it caused:** removing the admin-token barrier from local enrolment made it obvious that the
+same convenience should not silently weaken anything reached from off the machine - which is
+exactly the boundary the next iteration's own review had to re-examine under more adversarial
+pressure. → iteration 8.
+
+---
+
+## Iteration 8 - a fix that created a defect, caught by review
+
+**Source:** this project's own build, 08.09.2026 (the change) and 11.09.2026 (the review that caught
+what it broke).
+
+**What was fixed on 08.09:** recognition had been running directly on the event loop, which blocked
+every other request - the dashboard, every other node's poll - for as long as a frame took to
+process. Moving it into a thread pool executor fixed that; the loop's worst-case gap dropped to a
+measured 1.9 ms.
+
+**What that fix broke, reported honestly rather than hidden:** running directly on the event loop
+had been serialising access to the shared OpenCV detector and recognizer by accident - only one
+coroutine could ever be "in" that code at once, because nothing else could run while it did. Moving
+recognition to an executor removed that accidental safety net: six pollers could now be inside the
+same detector at the same moment, on a component library that does not promise that is safe.
+`detect()` is two separate calls (`setInputSize()` then `detect()`), so two threads holding
+differently-sized frames could genuinely interleave and have one detect at the other's dimensions.
+
+**How it was caught:** a structured adversarial review before the shoot, run twice after the first
+attempt hit session limits, found this along with six other real defects in one pass on 11.09 -
+among them a policy clock comparing local-meaning working hours against a UTC clock (correct storage,
+wrong comparison, would have silently admitted the wrong people at the wrong times on camera) and a
+stale-pending-grant state left set after a denial. All eighteen findings from that review were
+individually verified by hand rather than trusted at face value, because the review's own tooling
+had already been caught silently mis-reporting one earlier defect as "unconfirmed" when it had never
+actually been examined - a reminder that the process checking the system needs the same scepticism
+applied to it, not only the system itself.
+
+**The fix:** one lock around the shared detector, recognizer and roster, taken only for the fast
+part (scoring against a snapshot), so an enrolment can still land without waiting on a whole frame
+of recognition. Costs nothing the executor move was actually for: the loop stays free either way,
+and the measured 1.9 ms gap is unaffected by the lock.
+
+**Why this iteration is recorded even though nothing about it is user-facing:** M4 asks for
+iteration based on feedback, and a structured review is a form of feedback - deliberately gathered,
+adversarial, and in this case more effective than any single tester's live comment at finding a
+defect that only shows up under concurrent load a casual walk-up test would never produce. Full list
+of all seven defects and the reasoning for each is in `docs/REPORT_NOTES.md`; this entry is the one
+worth telling live, because "the fix for one defect created a different one, and here is how it was
+caught" is a stronger, more honest engineering story than a list of things that simply worked.
+
+**Change it caused:** with the recognition path now correctly locked and the review's other six
+findings fixed alongside it, the next real limitation to surface was not a defect at all but a
+measured cost - how long a sleeping camera takes to be useful again. → iteration 9.
+
+---
+
+## Iteration 9 - camera always-on, recognition range instead of wake-on-approach
+
+**Source:** this project's own build, 13.09.2026.
+**Built:** iteration 5 kept each camera powered down until the near sensor reported someone within
+250 cm, on the reasoning that an unpowered, non-recording camera is the strongest possible privacy
+and energy story available. A 108-cycle bench soak on 03.09 confirmed the design was sound - no
+failures, no reboot, no heap leak - and also measured its cost precisely: **median 937 ms from wake
+to first usable frame.**
+
+**Why that measurement argued the design out of the build:** that second is spent exactly when the
+frames matter most - while the subject is still walking in - so the earliest frames the brain
+actually received were of a face at an angle and mid-stride. The 250 cm trip distance existed only
+to buy back that second of warm-up before the subject arrived. The design was solving a problem of
+its own making.
+
+**What replaced it:** the camera now initialises at boot and stays initialised. The near sensor no
+longer switches anything on; it reports *recognition range*, tightened to 100 cm - roughly where an
+approaching person is square-on to the camera and still moving slowly enough to yield a usable frame
+- and the brain pulls a frame only while somebody is inside that range or an operator has explicitly
+asked for one.
+
+**The privacy argument survives the change and moves up a layer, which the report states rather than
+glosses over:** data minimisation was never really "the camera is unpowered"; it is "nothing is
+captured, processed or stored when the doorway is empty", and that is still true, now enforced by
+the brain declining to request a frame rather than by the sensor cutting power. The honest
+qualification: enforcement in software is weaker than enforcement in hardware, since a defect in the
+brain could request a frame it should not, whereas an unpowered camera physically cannot produce
+one.
+
+**Cost accepted, stated rather than hidden:** holding the camera on costs roughly 23,400 B of heap
+per node permanently, and removes the idle-power saving the sleeping design had. Both were judged
+worth it for frames that are usable on the first attempt instead of the fifth.
+
+**This is demo-only, by explicit choice, and is reversible.** The sleeping-camera design stays in
+the report as the privacy-by-design and energy argument iteration 5 actually measured and validated;
+it is not a fiction invented after the fact. Restoring it is a small, scoped change (the NVS-pinned
+camera map is unaffected; only the recognition-range threshold and its wiring to `cam_on` change),
+kept out only because a live demonstration benefits from every frame being usable rather than from
+the extra second of energy and privacy story, which is fully documented either way.
+
+**Tester reaction (operator role):** recognition landing on the first frame instead of needing a
+second or third approach removed the one thing that had made the face-recognition demo feel
+unreliable in rehearsal.
 
 ---
 
@@ -271,7 +448,7 @@ a sales pitch and will not reach Distinction.
 
 ### What genuinely improves, iteration by iteration
 
-| Working practice | Before (nothing built) | After iteration 4 (Uno, keypad) | After iteration 5 (ESP32, face) |
+| Working practice | Before (nothing built) | After iteration 4 (Uno, keypad) | After iteration 9 (ESP32, current state) |
 |---|---|---|---|
 | Coverage of the entrance | Only while a guard is present | Continuous | Continuous |
 | Nature of the alert | - | A labelled risk tier, then a credential check | A named recognition event |
@@ -279,21 +456,26 @@ a sales pitch and will not reach Distinction.
 | Accountability | None recorded | A valid code was used (not by whom) | A named person was recognised |
 | Social pressure on staff | Guard has to refuse colleagues personally | Removed - the keypad refuses | Removed - the system refuses |
 | Data the system holds about a person | None | None (a PIN is not personal data) | Biometric data (special category, Article 9) |
+| What happens if the smart system dies | No fallback - the keypad itself is the only layer | Same | RFID failover on a second Uno, journalled and reconciled (iteration 6) |
+| Response to its own defects | Fixed when a tester noticed | Same | A structured adversarial review, run twice, not just user reports (iteration 8) |
 
 The accountability and data-held rows are the ones worth writing about at length, because together
-they are the actual trade this project makes: iteration 5 buys individual accountability by taking
-on a data-protection obligation iterations 1-4 never had. That trade is exactly what D3 in the
-report asks to be defended, not glossed over.
+they are the actual trade this project makes: the ESP32 line buys individual accountability by
+taking on a data-protection obligation iterations 1-4 never had. That trade is exactly what D3 in
+the report asks to be defended, not glossed over. The last two rows exist to show the evaluation is
+not only about the sensor and the door - a mature access-control system also has to say what it does
+when it fails and how it finds its own mistakes, and both are now answered rather than left as gaps.
 
 ### What it costs, and what it breaks
 
 1. **False positives at a scale that makes a presence-only alert useless.** Measured twice: in
    principle across Systems One-Three (any ultrasonic trigger fires on anything that crosses it),
-   and for real on the ESP32 gate (the 3,710-event figure above). This is precisely why iteration 4
-   moved to authentication rather than tuning the threshold further, and why iteration 5's own
-   passage sensor needs the same fix rather than being trusted on its own.
-2. **A shared PIN provides no individual accountability** (iteration 4's own limitation, fixed by
-   iteration 5, at the cost below).
+   and for real on the ESP32 gate (the 3,710-`unidentified_passage`-event figure in iteration 5).
+   This is precisely why iteration 4 moved to authentication rather than tuning the threshold
+   further, and why the ESP32 gate's own passage sensor needs the same fix rather than being
+   trusted on its own.
+2. **A shared PIN provides no individual accountability** (iteration 4's own limitation, fixed from
+   iteration 5 onward, at the cost below).
 3. **Biometric data is a governance obligation a PIN never was** (iteration 5's own cost, see
    above and the report's LO4/D3 discussion).
 4. **A lockout, wherever it exists, is a denial of service against legitimate staff.** Three
@@ -302,21 +484,25 @@ report asks to be defended, not glossed over.
 5. **Automation complacency.** A system that watches the door invites guards to stop watching it.
    The risk that operators disengage when automation appears reliable is well documented
    (Parasuraman and Riley, 1997).
-6. **Single point of failure.** Cut the power and the entrance has neither detection nor access
-   control, at any iteration. The Uno watchdog layer designed for the ESP32 system exists precisely
-   for this - itself an example of the same "what does this iteration not do yet" logic applied one
-   level up, at the level of the whole system rather than one board.
+6. **Single point of failure, until iteration 6.** Cut the power and the entrance has neither
+   detection nor access control. The Uno watchdog layer built at iteration 6 exists precisely for
+   this, and even it has a named limitation of its own (its card list is a hand-maintained mirror
+   that can go stale against the brain's roster).
+7. **A fix can create the defect it did not have before.** Iteration 8's own honestly-reported
+   example: unblocking the event loop removed an accidental thread-safety guarantee nobody had
+   designed in the first place. Worth stating plainly, because claiming every change only ever made
+   things better would be the less credible story, not the more impressive one.
 
 ### The privacy argument, which runs the other way
 
 For LO4 and D3 there is a genuinely interesting inversion here: the *simpler*, earlier iteration is
 the more defensible one under data protection law. Iterations 1-4 store no personal data at all - a
 PIN is a shared secret, not biometric data, so UK GDPR Article 9 does not apply to any of them and
-there is no special-category processing to justify. Iteration 5, which is the one that actually
-solves the accountability problem, is the one that carries a DPIA obligation, a retention policy and
-a lawful-basis argument. That trade-off between accountability and privacy is exactly the kind of
-thing D3 asks you to defend rather than dodge, and it only exists because the project did not stop
-at iteration 4.
+there is no special-category processing to justify. Iteration 5 onward, which is where the
+accountability problem actually gets solved, is where the system starts carrying a DPIA obligation,
+a retention policy and a lawful-basis argument. That trade-off between accountability and privacy is
+exactly the kind of thing D3 asks you to defend rather than dodge, and it only exists because the
+project did not stop at iteration 4.
 
 ---
 
@@ -328,7 +514,15 @@ at iteration 4.
 | 2 - graduated LED/tone | Moodle "Alarm System Two", reproduced | https://wokwi.com/projects/475226727289705473 |
 | 3 - LCD risk display | Moodle "Alarm System Three", reproduced | https://wokwi.com/projects/475226849953199105 |
 | 4 - keypad access control | This project's own design, on the required Uno | https://wokwi.com/projects/475228123420711937 |
-| 5 - face recognition (Charon) | This project's own build, real hardware, ESP32 | this repository |
+| 5 - face recognition (Charon) | This project's own build, real hardware, ESP32 | this repository, commits `c065a03`-`da6d3a8` (03.09) |
+| 6 - RFID failover layer | Second Uno, watchdog + journal, real hardware | this repository, commits `48a8116`-`77b619a` (07.09) |
+| 7 - operational fixes from real use | Loopback-exempt enrolment, two-defect review | this repository, commits `ce0f6af`, `002316e` (07.09) |
+| 8 - a fix that broke something, caught by review | Event-loop unblock, then a thread-safety fix | this repository, commits `ff46a4c` (08.09), `6941e8e` (11.09) |
+| 9 - camera always-on | Recognition range replaces wake-on-approach | this repository, commit `b0ee2a2` (13.09) |
+
+Full detail behind iterations 5-9, including the six other defects iteration 8's review found and
+the measurements behind iteration 9, is in `docs/REPORT_NOTES.md` - this file tells the arc each one
+belongs to; that one carries the numbers.
 
 Iteration 4 must not be edited casually - it is the version presented as the answer to iteration 3.
 Iterations 1-3 are reproductions of the official material and should stay byte-for-byte faithful to
