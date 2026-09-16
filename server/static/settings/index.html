@@ -149,7 +149,7 @@ function renderSettings(){
 function renderNodes(){
   $("nodes").innerHTML = nodes.map(n=>`
     <div class="node">
-      <div><div class="id">${n.id}</div><div class="state ${n.state}">${n.state==="armed"?"armed · camera off":n.state}</div></div>
+      <div><div class="id">${n.id}</div><div class="state ${n.state}">${n.state==="armed"?"armed · nobody in range":n.state}</div></div>
       <label>Wake distance (cm)
         <input type="number" data-wake="${n.id}" placeholder="${n.near_cm>0?Math.round(n.near_cm)+" cm now":"--"}"></label>
       <label>${n.role.startsWith("gate")?"Passage distance (cm)":"Passage sensor (not fitted)"}
@@ -175,7 +175,7 @@ function renderNodes(){
     if(!q.length) return say("Enter a distance first.", false);
     const r = await adminFetch(`/nodes/${id}/threshold?`+q.join("&"), {method:"POST"});
     const j = await r.json();
-    say(r.ok?`${id}: wake<${j.wake_cm}cm, passage<${j.pass_thresh_cm}cm (stored on the board).`
+    say(r.ok?`${id}: recognise<${j.wake_cm}cm, passage<${j.pass_thresh_cm}cm (stored on the board).`
             :(j.error||j.detail||"The node did not accept it."), r.ok);
     await load();
   });

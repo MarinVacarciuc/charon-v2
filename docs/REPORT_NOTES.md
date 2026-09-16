@@ -68,22 +68,44 @@ This is an example of removing a failure mode *by construction* rather than by p
 
 ### Cameras are off until someone is present
 
-**Status: built and validated on hardware.** 2026-09-02, soak-tested 2026-09-03.
+**Status: built and validated on hardware 2026-09-02, soak-tested 2026-09-03, then
+deliberately replaced on 2026-09-13.** Both versions matter to the report, and the reason
+for the change is the interesting part.
 
-Each node keeps its camera powered down and initialises it only when the ultrasonic near
-sensor reports someone within range, sleeping again after 20 s idle. WiFi stays up
-throughout, which is also a power requirement: a true deep sleep drops the current draw
-below the 18650 boost-converter bank's auto-cutoff and the pack switches itself off. That
-is a measured property of this specific power hardware, not a firmware bug.
+**What was built.** Each node kept its camera powered down and initialised it only when the
+ultrasonic near sensor reported someone within 250 cm, sleeping again after 20 s idle. WiFi
+stayed up throughout, which is also a power requirement: a true deep sleep drops the current
+draw below the 18650 boost-converter bank's auto-cutoff and the pack switches itself off.
+That is a measured property of this specific power hardware, not a firmware bug. The
+108-cycle bench soak passed with no failures, no reboot and no heap leak (see Measurements),
+so the design was sound and the energy claim was measured rather than asserted.
 
-This is the privacy-by-design and energy-efficiency argument for LO4: the system does not
-record until there is something to record. `[CITE: data minimisation / privacy by design -
-UK GDPR Art. 5(1)(c) and Art. 25]`
+**Why it was replaced.** The soak also measured the cost: **median 937 ms from wake to first
+usable frame**. That second is spent exactly when the frames matter, while the subject is
+still walking in, so the earliest frames the brain received were of a face at an angle and in
+motion. The 250 cm trip distance existed only to buy back that second of warm-up. It was
+solving a problem the design had itself created.
 
-*Risk resolved 2026-09-03.* The 108-cycle bench soak passed with no failures, no reboot
-and no heap leak (see Measurements). The fallback of keeping the camera initialised while
-idle is not needed, and the energy and privacy claim is a measured feature rather than an
-aspiration.
+**What replaced it.** The camera now initialises at boot and stays initialised. The near
+sensor no longer switches anything on; it reports *recognition range*, set to **100 cm**, and
+the brain pulls frames only while somebody is inside that range or an operator has explicitly
+asked for a look. One metre is where an approaching person is square-on to the camera and
+still moving slowly enough to yield a usable frame.
+
+**The privacy argument survives the change, and moves up a layer.** Data minimisation was
+never really a property of the camera being unpowered; it is a property of nothing being
+captured, processed or stored when the doorway is empty. That is still true, and it is now
+enforced by the brain declining to request a frame rather than by the sensor cutting power.
+The honest qualification for the report is that enforcement in software is weaker than
+enforcement in hardware: a defect in the brain could request frames it should not, whereas an
+unpowered camera physically cannot produce one. That trade, a stronger guarantee exchanged
+for a system that identifies people accurately enough to be worth deploying, is exactly the
+kind of decision LO4 asks to be defended rather than glossed.
+`[CITE: data minimisation / privacy by design - UK GDPR Art. 5(1)(c) and Art. 25]`
+
+**Cost accepted.** Holding the camera on costs ~23 400 B of internal heap per node
+permanently (measured, see Measurements) and removes the idle-power saving. Both were judged
+worth paying for recognition that works on the first frame instead of the fifth.
 
 ---
 
@@ -109,9 +131,16 @@ board over WiFi.
 | Wake plus first frame | median 937 ms (872 to 989) |
 | Frame size, VGA quality 12 | median 9 907 B (9 634 to 12 364) |
 
-The ~1 s wake is the reason the near sensor wakes the camera rather than the first frame
+The ~1 s wake was the reason the near sensor woke the camera rather than the first frame
 request: at a walking pace, 2.5 m of approach is about the margin needed for the camera to
 be ready by the time a face is in frame.
+
+**Superseded 2026-09-13.** This measurement is what argued the sleeping design out of the
+build. Rather than keep spending 937 ms of every approach on warm-up, and keep the trip
+distance at 2.5 m purely to hide it, the camera now stays initialised and the sensor reports
+recognition range at 1 m instead. The figures above stand as the measurement of the design
+that was replaced, and the ~23 400 B heap cost of holding the camera on is now paid
+permanently on every node.
 
 Verdict: **ships as designed.** The fallback of keeping the camera initialised while idle is
 not needed.
@@ -197,6 +226,13 @@ running condition once the boards are spread across the yard per their actual mo
 positions - the fix is physical separation, which was always the plan, not a software change.
 The brain's 1.5 s status timeout was sized against the isolated-board measurement; it holds
 under this clustered worst case too (zero failures), so no change is needed on that evidence.
+
+*Still valid after the 2026-09-13 camera change.* What contended for airtime here was six
+boards **streaming**, not six cameras being powered, and streaming is still gated: the brain
+requests frames only from nodes with somebody inside recognition range. If anything the
+clustered worst case is now harder to reach by accident, because the trip distance dropped
+from 250 cm to 100 cm, so boards sitting near each other on a bench are less likely to hold
+each other's sensors tripped.
 
 ### Node polling and failure detection, 2026-09-03
 

@@ -48,7 +48,7 @@ header{
 .dot{width:10px; height:10px; border-radius:50%; flex:none}
 .chip .nm{font-weight:600; font-size:14px}
 .chip .st{margin-left:auto; font-size:11px; text-transform:uppercase; letter-spacing:.07em; color:var(--ink-faint)}
-/* Three states that must never be confusable: a sleeping camera is not a dead one. */
+/* Three states that must never be confusable: a node with an empty doorway is not a dead one. */
 .chip.live   .dot{background:var(--live); box-shadow:0 0 8px var(--live)}
 .chip.live   .st{color:var(--live)}
 .chip.armed  .dot{background:var(--armed)}
@@ -276,7 +276,9 @@ function renderStrip(){
   $("#strip").innerHTML = NODES.map(n=>{
     const s = byId[n.id];
     const state = s ? s.state : "offline";
-    const text = state==="live" ? "live" : state==="armed" ? "armed · camera off" : "offline";
+    // "armed" no longer means the camera is off - it stays on now - it means nobody is
+    // inside recognition range, so the brain is not asking this node for frames.
+    const text = state==="live" ? "live" : state==="armed" ? "armed · nobody in range" : "offline";
     return `<div class="chip ${state}"><span class="dot"></span>
             <span class="nm">${n.id}</span><span class="st">${text}</span></div>`;
   }).join("");
@@ -329,7 +331,7 @@ function syncTiles(){
     if(!t) return;
     t.className = "tile " + n.state;
     const ph = document.getElementById("ph-"+n.id);
-    if(ph) ph.textContent = n.state==="armed" ? "armed · camera off" : "offline";
+    if(ph) ph.textContent = n.state==="armed" ? "armed · nobody in range" : "offline";
   });
 }
 

@@ -6,14 +6,19 @@
 
   Three things changed from v1, each for a stated reason:
 
-  1. The camera is OFF until the near sensor says someone is here. Cameras that do not
-     record until a person is present is the privacy-by-design and energy story, and it
-     is cheap: WiFi stays up, which also keeps the 18650 boost bank above its
+  1. The camera comes up at boot and stays up; the near sensor reports RECOGNITION RANGE
+     (one metre) rather than switching the camera on. Sleeping the camera cost a second
+     of re-init on every approach, which is exactly when the frames matter, so the
+     privacy position moved up a layer: the brain does not request a frame unless
+     somebody is inside that range, and an empty doorway is still never recorded.
+     Note that WiFi stays up either way, which keeps the 18650 boost bank above its
      low-current auto-cutoff (a true deep sleep trips that cutoff on this exact power
-     hardware - measured, not theorised).
+     hardware - measured, not theorised). Changed 2026-09-13; the sleeping-camera design
+     is retained in the report as the privacy-by-design argument.
 
   2. /status serves the sensor and health picture as JSON without touching the camera,
-     so the brain can poll every node continuously while five of six cameras stay dark.
+     so the brain can poll every node continuously and pull frames from only the one
+     node somebody is actually standing in front of.
      The passage counter rides on it, which is what commits an entry or exit.
 
   3. A heartbeat square wave on GPIO 21 says "the smart path is alive": this board is
@@ -22,7 +27,7 @@
      WiFi and the brain dying all collapse it identically, which is the point.
 
   Camera routing differs between vendors of this connector style, so boot probes the
-  known maps and pins the winner in NVS; later wakes use the pinned map directly and
+  known maps and pins the winner in NVS; later boots use the pinned map directly and
   re-probe only if it ever stops working.
 */
 #include "esp_camera.h"
@@ -52,8 +57,8 @@ static bool hasPass = false;
 // - no divider (an HC-SR04 at 5V would need one). Free pins here: the camera holds 4-18,
 // octal PSRAM holds 33-37, flash 26-32, USB 19/20.
 //
-// NEAR (39/38) means the same thing on every node: "someone is here". At the gate it wakes
-// the camera; in a zone it wakes the camera and nothing else. PASS (41/40) exists only on
+// NEAR (39/38) means the same thing on every node: "someone is inside recognition range".
+// It actuates nothing; the brain reads it and decides. PASS (41/40) exists only on
 // the gate lanes and means a body actually crossed the lane - that is the event the brain
 // commits an entry or exit on.
 struct Sonar {
@@ -65,7 +70,17 @@ struct Sonar {
   bool cand;
   uint8_t agree;
 };
-static Sonar S_NEAR = {"near", 39, 38, WAKE_DIST_CM, -1, false, false, 0};
+// Recognition range. One metre, because that is roughly where a person approaching a door is
+// square-on to the camera and still walking slowly enough for a usable frame; further out and
+// the face is at an angle, closer and they are already reaching for the handle. The old
+// WAKE_DIST_CM (250 cm) was chosen for a different job - waking a sleeping camera early
+// enough to hide a one second warm-up - and that job no longer exists.
+//
+// A NEW NVS key on purpose. The six boards already have 250 stored under "wakecm" from
+// provisioning, and silently inheriting it would leave them recognising at two and a half
+// metres while every comment and document here said one metre.
+#define RECOG_DIST_CM 100
+static Sonar S_NEAR = {"near", 39, 38, RECOG_DIST_CM, -1, false, false, 0};
 static Sonar S_PASS = {"pass", 41, 40, PASS_DIST_CM, -1, false, false, 0};
 
 // Access-decision LEDs. GPIO1/2 are free on every one of these boards (not camera, not
@@ -86,11 +101,28 @@ static bool     hbLevel = false;
 static uint32_t hbToggledAt = 0;
 static uint32_t lastBrainMs = 0;   // 0 = the brain has never spoken to us since boot
 
-// Camera power state. Waking costs about a second of re-init, which is why the near
-// sensor wakes it rather than the first frame request.
-#define CAM_IDLE_MS 20000
+// Camera power state.
+//
+// Until 2026-09-13 the camera was deinitialised whenever nobody was near and re-initialised
+// on a sensor trip, which cost about a second of warm-up before the first usable frame. That
+// second landed exactly where it hurt: on the approach, while the subject was still walking
+// in, so the first frames the brain saw were of a moving face at an angle. The camera now
+// stays initialised for the life of the boot, and RECOGNITION RANGE, not camera power, is
+// what gates the work: S_NEAR trips at one metre and the brain only pulls frames while it is
+// tripped (or while an operator hold is running).
+//
+// The privacy argument for sleeping the camera has not gone away and is kept in the report as
+// the designed position. What changed is where it is enforced: no longer at the sensor, which
+// made the system slow, but at the brain, which simply does not request a frame unless
+// somebody is inside recognition range. Nothing is recorded either way when the doorway is
+// empty. See docs/REPORT_NOTES.md.
 static bool     camOn = false;
-static uint32_t camIdleAt = 0;
+static uint32_t camRetryAt = 0;      // camera init failed; when to try again
+#define CAM_RETRY_MS 5000
+
+// An operator asking to see a tile nobody is standing in front of. Only /wake sets this, and
+// the brain fetches frames while it is live even with the doorway empty.
+static uint32_t holdUntil = 0;
 
 static volatile uint32_t passages = 0;   // monotonic; the brain watches this increment
 
@@ -157,17 +189,26 @@ static bool probeAndPinMap() {
   return false;
 }
 
-// Push the sleep deadline out, never pull it in. Several things ask to keep the camera
-// awake - a near trip, a frame request, an explicit /wake hold - and they must not be able
-// to cut each other short. Without this, a dashboard asking for a 5 minute hold would be
-// silently reduced to 20 seconds by the first person who walked past the sensor.
-static void keepCameraAwakeFor(uint32_t ms) {
+// Extend an operator hold, never shorten it. Two things can ask for one - the dashboard's
+// "show me this tile" and a longer explicit /wake - and the shorter must not cut the longer
+// short. Without this a five minute hold would be silently reduced by the next one second
+// request that arrived.
+static void holdFor(uint32_t ms) {
   uint32_t want = millis() + ms;
-  if (!camOn || (int32_t)(want - camIdleAt) > 0) camIdleAt = want;
+  if ((int32_t)(want - holdUntil) > 0) holdUntil = want;
 }
 
-static bool cameraWake() {
-  if (camOn) { keepCameraAwakeFor(CAM_IDLE_MS); return true; }
+static bool holdActive() {
+  return holdUntil != 0 && (int32_t)(millis() - holdUntil) < 0;
+}
+
+// Bring the camera up and leave it up. Called at boot and retried from the loop if it fails,
+// because nothing wakes it on a sensor trip any more: a node whose init failed once would
+// otherwise stay blind until somebody power-cycled it.
+static bool cameraEnsureOn() {
+  if (camOn) return true;
+  if (camRetryAt != 0 && (int32_t)(millis() - camRetryAt) < 0) return false;
+
   bool ok = false;
   if (pinnedMap >= 0) {
     ok = startCamera(MAPS[pinnedMap]);
@@ -182,19 +223,26 @@ static bool cameraWake() {
   } else {
     ok = probeAndPinMap();
   }
+
   if (ok) {
     camOn = true;
-    camIdleAt = millis() + CAM_IDLE_MS;   // fresh wake: this IS the deadline, not an extension
-    Serial.printf("[charon] camera ON (%s)\n", MAPS[pinnedMap].name);
+    camRetryAt = 0;
+    Serial.printf("[charon] camera ON (%s) heap=%u\n", MAPS[pinnedMap].name, (unsigned)ESP.getFreeHeap());
+  } else {
+    camRetryAt = millis() + CAM_RETRY_MS;
+    Serial.printf("[charon] camera init failed, retrying in %d ms\n", CAM_RETRY_MS);
   }
   return ok;
 }
 
-static void cameraSleep() {
+// Release the camera. Not an idle sleep - the only caller is the OTA handler, because flash
+// writes and camera DMA cannot run at the same time. The board reboots straight afterwards,
+// so nothing needs to bring it back.
+static void cameraOff() {
   if (!camOn) return;
   esp_camera_deinit();
   camOn = false;
-  Serial.printf("[charon] camera OFF (idle) heap=%u\n", (unsigned)ESP.getFreeHeap());
+  Serial.println("[charon] camera released");
 }
 
 static float readDistanceCm(const Sonar &s) {
@@ -251,7 +299,10 @@ static void handleStatus() {
   s += ",\"passages\":" + String(passages);
   s += ",\"near_cm\":" + String(S_NEAR.cm, 1);
   s += ",\"near\":" + String(S_NEAR.blocked ? "true" : "false");
-  s += ",\"wake_cm\":" + String(S_NEAR.thresh);
+  s += ",\"wake_cm\":" + String(S_NEAR.thresh);      // kept: the brain, settings page and DB
+                                                     // all key on this name. It now means
+                                                     // recognition range, not wake distance.
+  s += ",\"hold\":" + String(holdActive() ? "true" : "false");
   s += ",\"pass_cm\":" + String(S_PASS.cm, 1);
   s += ",\"pass_blocked\":" + String(S_PASS.blocked ? "true" : "false");
   s += ",\"pass_thresh_cm\":" + String(S_PASS.thresh);
@@ -262,12 +313,11 @@ static void handleStatus() {
 
 static void handleShot() {
   noteBrainContact();
-  if (!camOn && !cameraWake()) {
+  if (!camOn && !cameraEnsureOn()) {
     server.sendHeader("X-Cam-On", "0");
     server.send(503, "text/plain", "camera unavailable");
     return;
   }
-  keepCameraAwakeFor(CAM_IDLE_MS);
   camera_fb_t *fb = esp_camera_fb_get();
   if (!fb) {
     server.sendHeader("X-Cam-On", "1");
@@ -289,19 +339,20 @@ static void handleShot() {
   esp_camera_fb_return(fb);
 }
 
-// Pre-warm a camera the near sensor has not tripped: the dashboard's "tap a sleeping tile"
-// needs a live picture without waiting for someone to walk up to the board.
+// The dashboard's "show me this tile" for a doorway nobody is standing in. The camera is
+// already on, so this no longer warms anything up; what it does is tell the brain to keep
+// pulling frames from a node whose recognition range is empty. The endpoint and its response
+// shape are unchanged so the dashboard, the settings page and camera_soak.py keep working.
 static void handleWake() {
   noteBrainContact();
   int sec = server.hasArg("sec") ? server.arg("sec").toInt() : 30;
   if (sec < 1)   sec = 1;
   if (sec > 300) sec = 300;
-  bool ok = cameraWake();
-  // An explicit operator request SETS the deadline rather than extending it: asking for a
-  // short look must actually give a short look, or the reported for_s is a lie. This does
-  // not strand anyone standing in front of the sensor - the near-sensor refresh in loop()
-  // pushes the deadline back out on the very next tick while they are still there.
-  if (ok) camIdleAt = millis() + (uint32_t)sec * 1000UL;
+  bool ok = cameraEnsureOn();
+  // An explicit operator request SETS the hold rather than extending it: asking for a short
+  // look must actually give a short look, or the reported for_s is a lie. Somebody standing
+  // in recognition range is unaffected either way, since the brain gates on `near` as well.
+  if (ok) holdUntil = millis() + (uint32_t)sec * 1000UL;
   server.send(ok ? 200 : 503, "application/json",
               String("{\"cam_on\":") + (ok ? "true" : "false") +
               ",\"for_s\":" + sec + "}");
@@ -368,7 +419,7 @@ static void handleThreshold() {
     int w = server.arg("wake").toInt();
     if (w < 5 || w > 400) { server.send(400, "text/plain", "wake must be 5..400 (sensor range)"); return; }
     S_NEAR.thresh = w;
-    prefs.putInt("wakecm", w);
+    prefs.putInt("recogcm", w);
   }
   server.send(200, "application/json",
               String("{\"pass_thresh_cm\":") + S_PASS.thresh + ",\"pass_cm\":" + String(S_PASS.cm, 1) +
@@ -382,7 +433,7 @@ static void handleRoot() {
   // MAC: it is the only way to tell which lump of hardware answers to which name.
   s += String("mac        : ") + WiFi.macAddress() + "\n";
   s += String("camera map : ") + (pinnedMap >= 0 ? MAPS[pinnedMap].name : "none") +
-       (camOn ? "  [ON]\n" : "  [asleep]\n");
+       (camOn ? "  [ON]\n" : "  [DOWN - init failed, retrying]\n");
   s += String("ssid       : ") + WiFi.SSID() + "\n";
   s += String("ip         : ") + WiFi.localIP().toString() + "\n";
   s += String("rssi       : ") + WiFi.RSSI() + " dBm\n";
@@ -393,8 +444,8 @@ static void handleRoot() {
   s += String("die temp   : ") + String(temperatureRead(), 1) + " C\n";
   s += String("heartbeat  : ") + (lastBrainMs && millis() - lastBrainMs < HB_BRAIN_TIMEOUT_MS
                                   ? "pulsing (brain heard from)" : "SILENT (no brain contact)") + "\n";
-  s += String("near  39/38: ") + String(S_NEAR.cm, 1) + " cm" + (S_NEAR.blocked ? "  [SOMEONE]" : "  [clear]  ") +
-       "  wakes under " + S_NEAR.thresh + " cm\n";
+  s += String("near  39/38: ") + String(S_NEAR.cm, 1) + " cm" + (S_NEAR.blocked ? "  [IN RANGE]" : "  [clear]   ") +
+       "  recognises under " + S_NEAR.thresh + " cm\n";
   if (hasPass) {
     s += String("pass  41/40: ") + String(S_PASS.cm, 1) + " cm" + (S_PASS.blocked ? "  [BLOCKED]" : "  [clear]  ") +
          "  counts under " + S_PASS.thresh + " cm\n";
@@ -417,17 +468,16 @@ void setup() {
 
   prefs.begin("charon", false);
   S_PASS.thresh = prefs.getInt("passcm", PASS_DIST_CM);
-  S_NEAR.thresh = prefs.getInt("wakecm", WAKE_DIST_CM);
+  S_NEAR.thresh = prefs.getInt("recogcm", RECOG_DIST_CM);
   pinnedMap     = prefs.getInt("cammap", -1);
   Serial.printf("[charon] pass<%dcm  near<%dcm\n", S_PASS.thresh, S_NEAR.thresh);
   Serial.printf("[charon] psram: %s\n", psramFound() ? "found" : "MISSING (check board flash/psram setting)");
 
-  // Probe once at first boot to learn and remember the map, then put the camera straight
-  // back to sleep: nothing should be recording until someone is actually here.
-  if (pinnedMap < 0) {
-    if (probeAndPinMap()) { camOn = true; cameraSleep(); }
-  } else {
-    Serial.printf("[charon] camera map pinned: %s (asleep until someone approaches)\n", MAPS[pinnedMap].name);
+  // Bring the camera up now and leave it up for the life of the boot. On a first boot this
+  // also probes and pins the map. If it fails the loop retries every CAM_RETRY_MS, because
+  // no sensor trip will do it later.
+  if (!cameraEnsureOn()) {
+    Serial.println("[charon] camera not up at boot, will keep retrying");
   }
 
   WiFi.mode(WIFI_STA);
@@ -473,7 +523,7 @@ void setup() {
     ArduinoOTA.setHostname(NODE_ID);
     ArduinoOTA.onStart([]() {
       // Flash writes and camera DMA do not mix; drop the camera before taking an image.
-      cameraSleep();
+      cameraOff();
       Serial.println("[charon] OTA update starting...");
     });
     ArduinoOTA.onEnd([]()   { Serial.println("[charon] OTA update done, rebooting"); });
@@ -527,19 +577,20 @@ void loop() {
   static bool turn = false;
   if (millis() - lastPing > 35) {
     lastPing = millis();
+    // The near sensor no longer switches anything on. It answers one question, continuously:
+    // is somebody inside recognition range? The brain reads that from /status and decides
+    // whether to pull a frame, so the sensor reports rather than actuates.
     if (hasPass) {
       turn = !turn;
       if (turn) { if (pollSonar(S_PASS)) passages++; }   // a body crossed the lane
-      else      { if (pollSonar(S_NEAR)) cameraWake(); } // approach: wake, do not decide
+      else      { pollSonar(S_NEAR); }                   // approach: report, do not decide
     } else {
-      if (pollSonar(S_NEAR)) cameraWake();               // interior board: near only
+      pollSonar(S_NEAR);                                 // interior board: near only
     }
-    // Someone still standing there keeps the camera alive without re-triggering. Extends
-    // only: a person walking past must not cut short a longer hold the dashboard asked for.
-    if (S_NEAR.blocked && camOn) keepCameraAwakeFor(CAM_IDLE_MS);
   }
 
-  if (camOn && (int32_t)(millis() - camIdleAt) >= 0) cameraSleep();
+  // Keep the camera up. No-op once it is running; retries on the interval if init failed.
+  if (!camOn) cameraEnsureOn();
 
   // A node that silently loses wifi reads OFFLINE to the brain, so keep retrying - but
   // retry the PREFERRED network first for the same reason it is preferred at boot. This is

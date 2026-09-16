@@ -122,6 +122,7 @@ class NodePoller:
         live = self.live
         live.last_status = status
         live.cam_on = bool(status.get("cam_on"))
+        live.hold = bool(status.get("hold"))     # absent on pre-2026-09-13 firmware -> False
         live.near = bool(status.get("near"))
         live.near_cm = float(status.get("near_cm", -1.0))
         live.pass_cm = float(status.get("pass_cm", -1.0))
@@ -188,8 +189,12 @@ class NodePoller:
             # our own handling must not be reported as dead hardware.
             log.exception("node %s: failed to process status (node stays online)", node_id)
 
-        # --- block 3: the frame, only when there is one to fetch. ---
-        if not self.live.cam_on:
+        # --- block 3: the frame, only when there is one worth fetching. ---
+        # Gated on recognition range, not on camera power. The camera stopped sleeping on
+        # 2026-09-13, so cam_on is true on every online node at all times and using it here
+        # would pull a frame from all six nodes on every tick - six JPEG decodes and six
+        # recognition passes a second with nobody in front of any of them.
+        if not self.live.wants_frames():
             return
         try:
             code, _headers, jpeg = await self._get(ip, "/shot.jpg", FRAME_TIMEOUT_S)

@@ -142,7 +142,7 @@ def main() -> int:
     for label, ok in checks:
         print(f"  [{'ok' if ok else 'FAIL'}] {label}")
     print(f"\n  ssid {s['ssid']}  rssi {s['rssi']} dBm  fw {s['fw']}  heap {s['heap']}  die {s['die_c']} C")
-    print(f"  near {s['near_cm']} cm (wake<{s['wake_cm']})   pass {s['pass_cm']} cm (count<{s['pass_thresh_cm']})")
+    print(f"  near {s['near_cm']} cm (recognise<{s['wake_cm']})   pass {s['pass_cm']} cm (count<{s['pass_thresh_cm']})")
 
     if not all(ok for _, ok in checks):
         return 1

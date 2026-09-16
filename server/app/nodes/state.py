@@ -31,6 +31,10 @@ class NodeLive:
     last_frame_at: float = 0.0
 
     cam_on: bool = False
+    # True while an operator has asked (via the node's /wake) to keep frames coming from a
+    # doorway nobody is standing in. Since 2026-09-13 the camera no longer sleeps, so this is
+    # no longer "is it warming up" - it is "fetch frames even though nobody is in range".
+    hold: bool = False
     near: bool = False
     near_cm: float = -1.0
     pass_cm: float = -1.0
@@ -68,9 +72,21 @@ class NodeLive:
     def ui_state(self) -> str:
         """The three states the dashboard must never confuse.
 
-        A sleeping camera is not a broken one, and the old build gave an operator no way to
-        tell them apart at a glance.
+        "live" used to mean the camera was powered. Since the camera stopped sleeping that
+        would be true of every online node at all times, which tells an operator nothing. It
+        now means what the operator actually wants to know: this node is looking at somebody
+        right now, either because they are inside recognition range or because the operator
+        asked for a look. An online node with an empty doorway is "armed", exactly as before.
         """
         if not self.online:
             return "offline"
-        return "live" if self.cam_on else "armed"
+        return "live" if (self.near or self.hold) else "armed"
+
+    def wants_frames(self) -> bool:
+        """Whether the brain should be pulling frames from this node this tick.
+
+        The single place that decision is expressed. Recognition range replaced camera power
+        as the gate: with six cameras now permanently initialised, keying off cam_on would
+        have every node streaming continuously into recognition for no reason.
+        """
+        return self.cam_on and (self.near or self.hold)
