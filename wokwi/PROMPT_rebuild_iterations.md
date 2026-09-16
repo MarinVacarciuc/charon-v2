@@ -16,6 +16,16 @@ and it specifically requires evidence of **multiple iterations**, each one an im
 response to a limitation found in the version before it - a single finished circuit is not enough on
 its own.
 
+**Context on where this fits in the real project:** the Arduino line (Systems One through Four) is
+not the whole project and is not presented as a finished answer - it is the first four iterations of
+one continuous access-control system. In the real project, System Four's own stated limitation (a
+shared PIN cannot identify a specific person) is what caused the Uno to be abandoned entirely in
+favour of an ESP32 board with a camera and face recognition, because that limitation has no fix on
+an 8-bit microcontroller. If this prompt is being used to produce evidence for that same
+assignment, present Systems One-Four exactly as what they are: the required starting hardware (P5)
+and its early iterations, not a separate or competing system next to whatever runs on better
+hardware.
+
 Three specific circuits already exist as the official starting material for this unit (given to
 every student). They are reproduced exactly below. The task is to:
 
