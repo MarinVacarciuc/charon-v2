@@ -1,8 +1,7 @@
 # Charon / Cerberus — v2 (ground-up server rebuild)
 
 Smart access-control and personnel-safety system for the **Ezra and Korede Security Ltd**
-scenario (BTEC HND Digital Technologies, Unit 21 *Emerging Technologies*). Live 15-minute
-demo + report, deadline **04.10.2026**.
+scenario (BTEC HND Digital Technologies, Unit 21 *Emerging Technologies*).
 
 This is a **fresh, independent repository**. It deliberately does **not** share git history
 or a remote with the earlier project at `~/IdeaProjects/charon`, which is left untouched so it
@@ -24,7 +23,7 @@ hardware ground truth (fixed pin maps, network hazards, hard-won lessons) is in
 - **SQLite** (WAL) for staff / roles / zones / grants / audit / embeddings.
 - **6× ESP32-S3** camera + ultrasonic nodes — firmware is proven and carried over as-is.
 - **Arduino Uno** — independent physical fail-safe watchdog (heartbeat over USB serial; on
-  brain loss it drives a local alert and arms its own ultrasonic backstop). Required by P5.
+  brain loss it drives a local alert and arms its own ultrasonic backstop). Required by Unit 21 brief.
 
 ## Layout
 
@@ -44,8 +43,3 @@ THREAT_MODEL.md  security posture (Phase 6 hardening baseline)
 Biometric data, secrets, models and caches are excluded from the mirror on purpose — see the
 script header. **Never edit files in the OneDrive copy; it is a backup, not a working tree.**
 
-## Working notes
-
-- Communication in Russian; code, comments, and git artefacts in English.
-- Verify empirically (curl the real endpoint, read the real log) before claiming something works.
-- Nothing here writes to the old `~/IdeaProjects/charon` repo or its GitHub remote.
