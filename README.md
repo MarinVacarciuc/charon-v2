@@ -14,7 +14,7 @@ spec, the threat model, the last concept design) was copied in once so this repo
 The previous "brain" (`~/charon-spikes/process_server.py`, ~1000 lines) was one monolithic
 threaded HTTP server with flat-file storage that accumulated repeated classes of bugs from
 reactive growth. This is a considered redesign, not another patch. The full reasoning, locked
-decisions, and phased build order live in [`docs/REBUILD_PLAN.md`](docs/REBUILD_PLAN.md); the
+decisions, and phased build order live in [`docs/BUILD_PLAN.md`](docs/BUILD_PLAN.md); the
 hardware ground truth (fixed pin maps, network hazards, hard-won lessons) is in
 [`docs/REBUILD_PROMPT_2026-07-17.md`](docs/REBUILD_PROMPT_2026-07-17.md).
 
