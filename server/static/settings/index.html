@@ -111,8 +111,6 @@ const SETTINGS = {
     "How many consecutive frames must show the same person before the system commits to that identity. Higher is calmer and slower; this is what stops a name flickering frame to frame.","number"],
   dwell_ms:       ["recognition","Dwell before a zone change (ms)",
     "How long someone must be seen in a zone before the board moves them there. Stops a person walking past a camera from flickering through zones they never entered.","number"],
-  gate_bind_window_s: ["recognition","Gate decision validity (s)",
-    "How long a gate decision stays claimable by a physical passage. Someone recognised and then walking through within this window is recorded as that person; longer than this and the passage is logged as unidentified.","number"],
   unknown_zone_throttle_s: ["alerting","Unknown-face alert gap (s)",
     "Minimum time between 'unknown person in a zone' alerts from the same camera, so someone lingering does not flood the feed.","number"],
   wrong_zone_throttle_s:   ["alerting","Wrong-zone alert gap (s)",

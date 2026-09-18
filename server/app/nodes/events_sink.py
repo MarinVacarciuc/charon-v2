@@ -52,19 +52,14 @@ class BrainEvents:
         self._tg = telegram
         self._gate_states: dict[str, gate.GateNodeState] = {}
         self._zone_states: dict[str, zones.ZoneNodeState] = {}
-        # Last frame's face-count per node, for the tailgating check at passage time - a
-        # passage is reported from /status independent of frame timing, so this is the
-        # freshest count available rather than a fresh detect() on every passage tick.
-        self._last_face_count: dict[str, int] = {}
 
     def reset_live_state(self) -> None:
         """Drop every per-node tracker and pending decision - called by the take reset.
-        Without this, a committed identity or a pending decision from the previous take
-        survives into the next one and the first passage of a new take could bind to
-        someone who is no longer even in frame."""
+        Without this, a committed identity from the previous take survives into the next one
+        and the first frame of a new take could commit someone who is no longer in front of
+        the camera."""
         self._gate_states.clear()
         self._zone_states.clear()
-        self._last_face_count.clear()
 
     async def _voice_on(self) -> bool:
         return await config.get_bool(self._db, "voice_enabled", True)
@@ -126,7 +121,11 @@ class BrainEvents:
             return
         pairs = await self._observe_faces(frame)
         faces = [p[0] for p in pairs]
-        self._last_face_count[node.node_id] = len(faces)
+        node.last_faces = [
+            {"x": float(row[0]), "y": float(row[1]), "w": float(row[2]), "h": float(row[3]),
+             "person_id": obs.person_id, "confident": obs.confident}
+            for obs, row in pairs
+        ]
 
         if node.is_gate:
             await self._process_gate_frame(node, faces)
@@ -134,19 +133,11 @@ class BrainEvents:
             await self._process_zone_frame(node, faces)
 
     async def passage(self, node: NodeLive, count: int) -> None:
-        if not node.is_gate or node.direction is None:
-            return
-        state = self._gate_states.setdefault(node.node_id, gate.GateNodeState())
-        # Only the COUNT matters to gate.process_passage's tailgating check; real
-        # FaceObservation instances just keep the call honestly typed rather than passing a
-        # bare int where the signature expects the real shape.
-        faces_now = [FaceObservation(None, False)] * self._last_face_count.get(node.node_id, 0)
-        now = _now()
-        bind_window = await config.get_float(self._db, "gate_bind_window_s", 3.0)
-        events = gate.process_passage(state, node.node_id, node.direction, faces_now, now,
-                                      bind_window_s=bind_window)
-        for e in events:
-            await self._apply_gate_event(node, e)
+        """Deliberately inert since 2026-09-18. The PASS sonar still counts and still reports,
+        so the raw figure stays visible on the node page, but it no longer decides anything -
+        gate.process_frame commits entry and exit on recognition alone. gate's module
+        docstring has the measurements behind that call."""
+        return
 
     # ------------------------------------------------------------------ gate
 
@@ -174,9 +165,7 @@ class BrainEvents:
         primary_id = faces[0].person_id if faces and faces[0].confident else None
         check = await self._policy_check_for(primary_id) if primary_id is not None else (lambda pid, now: (False, "UNKNOWN"))
 
-        bind_window = await config.get_float(self._db, "gate_bind_window_s", 3.0)
-        events = gate.process_frame(state, node.node_id, faces, check, now,
-                                    bind_window_s=bind_window)
+        events = gate.process_frame(state, node.node_id, node.direction, faces, check, now)
         for e in events:
             await self._apply_gate_event(node, e)
 
@@ -188,8 +177,15 @@ class BrainEvents:
                 self._db, "gate_decision", f"{node.node_id}: {name} -> {'GRANTED' if e.granted else 'DENIED ' + e.reason}",
                 severity="info" if e.granted else "warn", node_id=node.node_id, person_id=e.person_id,
             )
+            # Name and role travel as their own fields, not only inside `message`. The gate
+            # terminal was reading the name back out by splitting that sentence on a colon,
+            # which breaks the moment anyone is enrolled with a colon in their name and could
+            # never have carried a role at all.
             await self._hub.publish(ev.alert("gate_decision", f"{name}: {'granted' if e.granted else 'denied'}",
-                                             node=node.node_id, person_id=e.person_id, granted=e.granted))
+                                             node=node.node_id, person_id=e.person_id, granted=e.granted,
+                                             person_name=name,
+                                             person_role=(p["role_name"] if p else ""),
+                                             reason=e.reason))
             # Beat 1: the spoken line lands on the DECISION, not on the passage, so the voice,
             # the green light and the phone all happen together as the person walks up.
             if self._voice and node.direction == "in" and await self._voice_on():

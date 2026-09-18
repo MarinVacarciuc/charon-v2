@@ -29,6 +29,13 @@ class NodeLive:
     # rather than every open browser tab polling the board directly.
     last_frame: bytes | None = None
     last_frame_at: float = 0.0
+    # Face boxes found in the most recently PROCESSED frame, in that frame's own pixel
+    # coordinates (it is already rotated, and detection ran on the rotated copy, so the two
+    # always share an orientation). Carries person_id rather than a name: the dashboard
+    # already holds the roster, so resolving the name there costs nothing and avoids a
+    # database read per face per frame. Detection finishes just after the frame is published,
+    # so a viewer can catch boxes one frame behind - about 90 ms, a few pixels of drift.
+    last_faces: list[dict[str, Any]] = field(default_factory=list)
 
     cam_on: bool = False
     # True while an operator has asked (via the node's /wake) to keep frames coming from a

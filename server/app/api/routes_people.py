@@ -8,10 +8,10 @@ from __future__ import annotations
 
 import cv2
 import numpy as np
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, File, Request, UploadFile
 from fastapi.responses import JSONResponse
 
-from ..db.repositories import audit, embeddings, people
+from ..db.repositories import audit, embeddings, people, presence
 from .auth import require_admin
 from ..recognition.engine import is_confident_match
 
@@ -27,8 +27,11 @@ def _decode(jpeg: bytes) -> np.ndarray | None:
 async def list_people(request: Request):
     rows = await people.list_all(request.app.state.db)
     engine = request.app.state.engine
+    # The token itself never leaves the server: this page is designed to sit on a wall. Whether
+    # one exists is all an operator needs to decide if there is anything to revoke.
     return {"people": [
         {**{k: v for k, v in r.items() if k not in ("session_token",)},
+         "has_token": bool(r["session_token"]),
          "samples": engine.sample_count(r["id"])}
         for r in rows
     ]}
@@ -81,6 +84,66 @@ async def enroll(request: Request, name: str, role: str, node: str):
     engine.add_sample(person_id, vec)  # visible to recognise() on the very next frame, no restart needed
 
     return {"person_id": person_id, "name": name, "node": node,
+            "samples": engine.sample_count(person_id),
+            "face_score": float(faces[0][14])}
+
+
+MAX_PHOTO_BYTES = 12 * 1024 * 1024
+
+
+@router.post("/enroll/photo", dependencies=[Depends(require_admin)])
+async def enroll_photo(request: Request, name: str, role: str, photo: UploadFile = File(...)):
+    """Same enrolment, from a file on the operator's machine instead of a camera frame.
+
+    Worth having for a reason beyond convenience: a new starter can be on the roster before
+    they first walk through the gate, and someone photographed under decent lighting gives a
+    better template than a corridor camera at an angle. The face rules stay identical to live
+    enrolment, including the refusal on more than one face, because an ambiguous group photo
+    is the same mistake as an ambiguous frame and the source of the pixels does not change
+    that. The row is stamped source='photo', so a later audit can tell which templates came
+    from a controlled capture and which from the estate's own cameras.
+    """
+    db = request.app.state.db
+    engine = request.app.state.engine
+
+    blob = await photo.read()
+    if not blob:
+        return JSONResponse({"error": "the uploaded file is empty"}, status_code=400)
+    if len(blob) > MAX_PHOTO_BYTES:
+        return JSONResponse({"error": f"photo is larger than {MAX_PHOTO_BYTES // (1024 * 1024)} MB"},
+                            status_code=413)
+
+    # Decoded by content, not by filename or the browser's declared type: neither is evidence
+    # of what the bytes actually are, and imdecode returning None is the honest test.
+    frame = _decode(blob)
+    if frame is None:
+        return JSONResponse({"error": f"'{photo.filename}' is not an image this build can read "
+                                      "(JPEG and PNG are the safe choices)"}, status_code=415)
+
+    faces = engine.detect(frame)
+    if faces.shape[0] == 0:
+        return JSONResponse({"error": f"no face detected in '{photo.filename}'"}, status_code=422)
+    if faces.shape[0] > 1:
+        return JSONResponse(
+            {"error": f"{faces.shape[0]} faces detected in '{photo.filename}' - "
+                      "crop it so only the person being enrolled is in the picture"},
+            status_code=422,
+        )
+
+    vec = engine.embed(frame, faces[0])
+
+    try:
+        person_id = await people.get_or_create(db, name, role)
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+
+    await embeddings.add(db, person_id, vec, source="photo")
+    engine.add_sample(person_id, vec)
+    await audit.record(db, "enrol_photo", f"{name}: template added from file '{photo.filename}'",
+                       actor="admin", person_id=person_id)
+
+    return {"person_id": person_id, "name": name, "source": "photo",
+            "filename": photo.filename,
             "samples": engine.sample_count(person_id),
             "face_score": float(faces[0][14])}
 
@@ -159,6 +222,7 @@ async def roster(request: Request):
         role_zones = await people.load_role_zones(db, r["role_name"])
         out.append({
             **{k: v for k, v in r.items() if k != "session_token"},
+            "has_token": bool(r["session_token"]),
             "samples": engine.sample_count(r["id"]),
             "zone_overrides": [o["name"] for o in overrides],
             "role_zones": sorted(role_zones),
@@ -188,6 +252,21 @@ async def delete_person(request: Request, person_id: int):
     roster = await embeddings.load_all(request.app.state.db)
     request.app.state.engine.load_samples(roster)
     return {"ok": True}
+
+
+@router.post("/{person_id}/revoke-token", dependencies=[Depends(require_admin)])
+async def revoke_token(request: Request, person_id: int):
+    """Annul someone's live session token without moving them off site."""
+    db = request.app.state.db
+    p = await people.get_by_id(db, person_id)
+    if p is None:
+        return JSONResponse({"error": f"no person with id {person_id}"}, status_code=404)
+    old = await presence.revoke_token(db, person_id)
+    if not old:
+        return {"ok": True, "revoked": False, "person_id": person_id}
+    await audit.record(db, "token_revoked", f"{p['name']}: session token {old} revoked by an admin",
+                       severity="warn", actor="admin", person_id=person_id)
+    return {"ok": True, "revoked": True, "person_id": person_id}
 
 
 @router.post("/{person_id}/grant", dependencies=[Depends(require_admin)])

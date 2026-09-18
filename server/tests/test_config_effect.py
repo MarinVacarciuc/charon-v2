@@ -43,7 +43,7 @@ def test_confirm_frames_can_be_lowered_on_a_running_tracker():
 def test_gate_bind_window_is_honoured():
     st = gate.GateNodeState()
     for i in range(3):
-        gate.process_frame(st, "gate-in", [known()], allow, T0 + dt.timedelta(milliseconds=300*i))
+        gate.process_frame(st, "gate-in", "in", [known()], allow, T0 + dt.timedelta(milliseconds=300*i))
     late = T0 + dt.timedelta(seconds=8)
     # default 3s window: too late to bind
     assert gate.process_passage(gate_copy(st), "gate-in", "in", [known()], late)[0].kind \

@@ -1,15 +1,27 @@
-"""Gate decision and passage-binding logic. Pure: given facts, produces events; no I/O.
+"""Gate decision logic. Pure: given facts, produces events; no I/O.
 
-This is the model Marin locked in over DEMO_ARCHITECTURE's original camera-only proposal,
-2026-09-02: recognition names someone and issues a decision (BEAT 1 - green/red, voice,
+The two-beat model Marin locked in over DEMO_ARCHITECTURE's camera-only proposal on
+2026-09-02 was: recognition names someone and issues a decision (BEAT 1 - green/red, voice,
 token; see PendingDecision), but presence only flips when the PASS ultrasonic's counter
-actually increments (BEAT 2 - a real body crossed the lane). A decision nobody ever walked
-on is just someone who paused and left; a passage nobody decided about is a real anomaly.
+increments (BEAT 2 - a real body crossed the lane). Two anomalies fell out of the gap
+between the beats, neither of which the old build had: DENIED_CROSSED (recognised, refused,
+walked through anyway) and UNIDENTIFIED_PASSAGE (a body crossed with no decision to bind to).
 
-Two events the old build never had at all, both real anomalies worth their own alert:
-DENIED_CROSSED (recognised, refused, walked through anyway) and UNIDENTIFIED_PASSAGE (a body
-crossed with no fresh decision to bind it to - the old build only ever logged this at ENTER
-and stayed silent about it at EXIT).
+BEAT 2 is switched off as of 2026-09-18, on Marin's call, because the sensor could not
+deliver it. Measured in place: the PASS sonar idles BLOCKED against clutter sitting ~33 cm
+in front of it (70% of samples inside its 60 cm threshold), and 21-34% of its samples are
+noise excursions past the 80 cm hysteresis release, each of which fakes a clear-then-block
+pair that is indistinguishable from a body. That counted 34 and 59 phantom crossings in
+three minutes at the two gates, and any one of them landing inside the bind window after a
+real recognition committed that person - which is exactly the symptom reported. Cross-talk
+between six unsynchronised sonars on one bench feeds the same noise.
+
+So process_frame now commits entry and exit itself and process_passage, below, is no longer
+wired to anything. It is kept intact, and PendingDecision with it, because the sensor is
+being abandoned for now rather than judged worthless - remounted facing a clear lane, with
+a dwell-time guard instead of a bare edge, it would bring both anomaly events back. Nothing
+calls it in the meantime, so re-wiring it means removing the direct commit here first, or
+every crossing is counted twice.
 """
 from __future__ import annotations
 
@@ -50,15 +62,20 @@ class GateEvent:
     face_count: int = 1
 
 
-def process_frame(state: GateNodeState, node_id: str, faces: list[FaceObservation],
-                  policy_check, now: datetime,
-                  bind_window_s: float = BIND_WINDOW_S) -> list[GateEvent]:
-    """One frame -> zero or one `decision` event.
+def process_frame(state: GateNodeState, node_id: str, direction: str,
+                  faces: list[FaceObservation], policy_check,
+                  now: datetime) -> list[GateEvent]:
+    """One frame -> a `decision`, and the entry or exit it now commits directly.
 
     `faces` should be pre-sorted largest first; only faces[0] drives the decision (a gate has
-    one expected subject at a time), the rest only matter at passage time for tailgating.
+    one expected subject at a time), the rest only count towards tailgating.
     `policy_check(person_id, now) -> (granted: bool, reason: str)` is policy.policy_ok,
     injected so this module never needs a real Person object to be tested.
+
+    The frame is the whole event here - see the module docstring for why the PASS sensor no
+    longer gets a vote. The brain pulls frames only while the NEAR sonar reports someone
+    inside one metre, so reaching this point already means "recognised, and standing at the
+    gate". What it cannot mean is that they walked through: nothing measures that any more.
     """
     if not faces:
         state.tracker.observe(None)
@@ -86,8 +103,22 @@ def process_frame(state: GateNodeState, node_id: str, faces: list[FaceObservatio
     granted, reason = policy_check(committed, now)
     state.pending = PendingDecision(person_id=committed, granted=granted, reason=reason,
                                     decided_at=now, face_count=len(faces))
-    return [GateEvent(kind="decision", node_id=node_id, person_id=committed,
-                      granted=granted, reason=reason, face_count=len(faces))]
+    events = [GateEvent(kind="decision", node_id=node_id, person_id=committed,
+                        granted=granted, reason=reason, face_count=len(faces))]
+
+    # Tailgating rides on the decision rather than on a passage, which also rate-limits it:
+    # a decision only fires when the committed identity CHANGES, so a second face lingering
+    # in frame raises one alert, not one per frame for as long as they stand there.
+    if len(faces) > 1:
+        events.append(GateEvent(kind="tailgating", node_id=node_id, face_count=len(faces)))
+
+    # Exit is fail-safe by design: no policy gate on the way out, ever - only whether we know
+    # who is leaving. Entry is the only direction a refusal can stop.
+    if direction == "out":
+        events.append(GateEvent(kind="exit", node_id=node_id, person_id=committed))
+    elif granted:
+        events.append(GateEvent(kind="entry", node_id=node_id, person_id=committed))
+    return events
 
 
 def process_passage(state: GateNodeState, node_id: str, direction: str,

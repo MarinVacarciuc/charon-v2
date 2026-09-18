@@ -17,7 +17,19 @@ async def get_by_name(db: Database, name: str) -> dict | None:
 
 
 async def get_by_id(db: Database, person_id: int) -> dict | None:
-    row = await db.fetch_one("SELECT * FROM people WHERE id = ?", (person_id,))
+    """One person, with role and zone resolved to names - the same shape `list_all` returns,
+    for the reason its docstring gives: a caller left to join an id itself becomes a second
+    place the mapping can disagree with the database."""
+    row = await db.fetch_one(
+        """
+        SELECT p.*, r.name AS role_name, z.name AS zone_name
+        FROM people p
+        JOIN roles r ON r.id = p.role_id
+        LEFT JOIN zones z ON z.id = p.at_zone_id
+        WHERE p.id = ?
+        """,
+        (person_id,),
+    )
     return dict(row) if row else None
 
 

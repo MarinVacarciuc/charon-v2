@@ -62,6 +62,24 @@ async def commit_exit(db: Database, person_id: int) -> bool:
     return was_in
 
 
+async def revoke_token(db: Database, person_id: int) -> str:
+    """Void someone's session token while leaving them on site. Returns the token that was
+    annulled, or '' if there was none.
+
+    Deliberately not an exit. Someone whose authorisation is withdrawn mid-shift is still
+    physically in the building, and recording them as having left would put a lie in the
+    evacuation roll the board is meant to be good for. What this removes is the credential;
+    where they are stays a matter of observation.
+    """
+    row = await db.fetch_one("SELECT session_token FROM people WHERE id = ?", (person_id,))
+    old = (row["session_token"] if row else "") or ""
+    await db.execute(
+        "UPDATE people SET session_token = '', updated_at = ? WHERE id = ?",
+        (utcnow(), person_id),
+    )
+    return old
+
+
 async def set_zone(db: Database, person_id: int, zone_name: str) -> None:
     await db.execute(
         "UPDATE people SET at_zone_id = (SELECT id FROM zones WHERE name = ?), updated_at = ? WHERE id = ?",

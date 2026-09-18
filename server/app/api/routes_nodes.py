@@ -7,6 +7,7 @@ phone propped at the gate needs no login).
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 
 import aiohttp
@@ -43,8 +44,13 @@ async def frame(request: Request, node: str):
             {"error": f"no frame yet from '{node}'", "online": live.online, "cam_on": live.cam_on},
             status_code=503,
         )
+    # Boxes travel with the image rather than on a separate poll, so a viewer can never draw
+    # one frame's rectangles over a different frame. A header keeps the body a plain JPEG.
     return Response(content=live.last_frame, media_type="image/jpeg",
-                    headers={"Cache-Control": "no-store", "X-Frame-Age-Ms": str(int(live.frame_age_s() * 1000))})
+                    headers={"Cache-Control": "no-store",
+                             "X-Frame-Age-Ms": str(int(live.frame_age_s() * 1000)),
+                             "X-Faces": json.dumps(live.last_faces, separators=(",", ":")),
+                             "Access-Control-Expose-Headers": "X-Faces, X-Frame-Age-Ms"})
 
 
 @router.get("/nodes")
@@ -114,8 +120,10 @@ async def set_rotation(request: Request, node_id: str, deg: int):
         "UPDATE nodes SET rotation_deg = ? WHERE id = ?", (deg, node_id))
     live.rotation_deg = deg
     # Drop the cached frame: it is in the OLD orientation, and serving it once more would
-    # look like the setting had not taken.
+    # look like the setting had not taken. The boxes go with it - they are in the old
+    # frame's coordinates and would land in the wrong place on the next one.
     live.last_frame = None
+    live.last_faces = []
     return {"node": node_id, "rotation_deg": deg}
 
 

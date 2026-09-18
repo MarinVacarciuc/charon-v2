@@ -57,7 +57,7 @@ def test_denied_crossed_consumes_the_pending_decision():
     re-fired the same alert and re-issued a session token - an alert storm on camera."""
     st = GateNodeState()
     for i in range(3):
-        process_frame(st, "gate-in", [known()], deny_all, T0 + dt.timedelta(milliseconds=300 * i))
+        process_frame(st, "gate-in", "in", [known()], deny_all, T0 + dt.timedelta(milliseconds=300 * i))
     first = process_passage(st, "gate-in", "in", [known()], T0 + dt.timedelta(seconds=1))
     assert [e.kind for e in first] == ["denied_crossed"]
     assert st.pending is None, "the refused decision must be consumed, exactly like a granted one"
