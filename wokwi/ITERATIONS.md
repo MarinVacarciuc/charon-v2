@@ -441,6 +441,73 @@ unreliable in rehearsal.
 
 ---
 
+## Iteration 10 - the passage sensor loses its vote, and the report loses an argument
+
+**Source:** this project's own build, 18.09.2026.
+**Built:** iteration 5 fixed the gate on a two-beat model and every iteration since kept it.
+Recognition names someone and issues a decision - green or red, the spoken line, the session token -
+but presence only flips when the PASS ultrasonic's counter increments, because that is a real body
+crossing the lane. The gap between the two beats is where this build found two anomalies the old
+one had no events for at all: DENIED_CROSSED, recognised and refused and through the door anyway,
+and UNIDENTIFIED_PASSAGE, a body crossing with no decision to bind it to.
+
+**What real use exposed:** standing in front of a gate camera was enough to be recorded as having
+entered or left, without going anywhere near the side-facing sensor. The obvious reading - that the
+brain had started committing on the face alone - was wrong, and the audit log said so: the logic was
+waiting for the sensor exactly as designed. The sensor was simply reporting crossings that were not
+happening. **262 of the last 400 audit events were UNIDENTIFIED_PASSAGE**, and any one of them
+landing inside the three-second bind window after a real recognition was enough to commit that
+person.
+
+**The measurement that settled it:** the PASS sonar at gate-in had **70% of its samples inside its
+own 60 cm trip threshold** (median 33 cm), which means something was sitting permanently in front of
+it and the sensor was resting in the BLOCKED state. A further **21% at gate-in and 34% at gate-out
+read beyond 80 cm**, past the hysteresis release. Each of those excursions faked a clear, the next
+normal reading re-blocked, and the pair was indistinguishable from a body passing. That produced
+**34 and 59 phantom crossings in roughly three minutes** with nobody walking anywhere. Readings
+jumping 20 → 153 → 30 cm between consecutive samples point at the second contributor: six
+unsynchronised sonars on one bench hear each other's bursts.
+
+**Why the defence already in place did nothing:** the hysteresis and two-sample agreement added
+earlier were designed against the opposite failure - an idle-clear sensor whose noise fakes a
+*block*. Here the resting state is inverted, so the same noise fakes a *clear*, and the guard sat on
+the wrong side of the transition. A mitigation is only as good as the failure mode it was aimed at,
+which is the more general lesson worth carrying out of this iteration.
+
+**What replaced it:** `process_frame` now commits entry and exit itself, and the passage counter
+decides nothing. The brain pulls frames only while the near sensor reports someone inside one metre,
+so reaching a decision still means recognised *and* standing at the gate. Entry remains the only
+direction a refusal can stop; exit stays fail-safe.
+
+**What that costs, stated plainly rather than sold as a simplification:** both anomaly events are now
+unreachable, because nothing independent of the face can disagree with the face. A decision and a
+crossing became the same event, so the system can no longer notice that someone was recognised,
+refused, and went through regardless - which was one of the two things this build had that its
+predecessor did not. It also means a photograph held up to a gate camera commits an entry, where
+previously it would at worst have produced a decision with no passage behind it.
+
+**This contradicts the report, and the report has to carry that rather than quietly drop it.**
+Section 2.2 argues that the answer to an indiscriminate sensor "is not to remove the sensor" but to
+put a confirming layer behind it. Section 2.5 backs presence sensing "without reservation" on the
+grounds that its risks are engineering risks and engineering risks can be engineered away. This
+iteration is a measured counter-example to the second claim and an inversion of the first: the
+confirming layer here is the camera, and it was the cheap sensor that had to be removed from the
+decision path, not the expensive one. Both passages are qualified in the report accordingly.
+
+**Reversible, and deliberately left so.** `process_passage` and its tests are untouched, because the
+sensor is being abandoned for now rather than judged worthless. Remounted to face a clear lane, so
+its resting state is genuinely clear, and with the edge test replaced by a dwell-time test - a
+blocked period of plausible human length, then a sustained clear - it would restore both anomaly
+events. Re-wiring it means removing the direct commit first, or every crossing is counted twice; the
+module docstring says so at the point where someone would make that mistake.
+
+**Operator observation (Marin, live testing):** appearing in front of either gate registered an entry
+or an exit immediately, with the side sensors never involved. That report is what started this
+iteration, and it is the only one in this log that began as a suspected fault in the recognition
+path and ended in the sensor.
+
+---
+
 ## D2 - evaluating the solution against their working practices
 
 D2 asks for evaluation, which means the costs as well as the gains. A list of benefits alone reads as
@@ -519,6 +586,7 @@ project did not stop at iteration 4.
 | 7 - operational fixes from real use | Loopback-exempt enrolment, two-defect review | this repository, commits `ce0f6af`, `002316e` (07.09) |
 | 8 - a fix that broke something, caught by review | Event-loop unblock, then a thread-safety fix | this repository, commits `ff46a4c` (08.09), `6941e8e` (11.09) |
 | 9 - camera always-on | Recognition range replaces wake-on-approach | this repository, commit `b0ee2a2` (13.09) |
+| 10 - passage sensor loses its vote | Measured sensor failure; recognition commits alone | this repository (18.09) |
 
 Full detail behind iterations 5-9, including the six other defects iteration 8's review found and
 the measurements behind iteration 9, is in `docs/REPORT_NOTES.md` - this file tells the arc each one
