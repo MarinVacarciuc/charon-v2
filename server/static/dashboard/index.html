@@ -78,8 +78,9 @@ main{flex:1; display:grid; grid-template-columns:62fr 38fr; gap:14px; padding:14
 .cards{flex:1; overflow-y:auto; padding:8px; display:flex; flex-direction:column; gap:7px}
 .card{
   background:var(--panel2); border:1px solid var(--line); border-left:3px solid var(--live);
-  border-radius:7px; padding:9px 11px;
+  border-radius:7px; padding:9px 11px; cursor:pointer;
 }
+.card:hover{border-color:var(--accent)}
 .card .who{font-size:16px; font-weight:650; line-height:1.2}
 .card .meta{margin-top:3px; font-size:12px; color:var(--ink-dim)}
 .card.out{border-left-color:var(--ink-faint)}
@@ -126,11 +127,78 @@ main{flex:1; display:grid; grid-template-columns:62fr 38fr; gap:14px; padding:14
   position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
   flex-direction:column; gap:4px; font-size:11px; letter-spacing:.09em; text-transform:uppercase;
 }
+
+/* ---------- face boxes ----------
+   Green means the system committed to a name, red means it did not. Colour alone never
+   carries it: the caption under every box says which, so the distinction survives a
+   greyscale print and a red-green colour deficiency. 3px because the previous build's
+   hairline rectangles disappeared entirely once a 1080p recording was scaled down. */
+.tile .fx{position:absolute; inset:0; pointer-events:none; z-index:1}
+.face{
+  position:absolute; border:3px solid var(--deny); border-radius:3px;
+  box-shadow:0 0 0 1px rgba(0,0,0,.6);
+}
+.face.known{border-color:var(--grant)}
+.face .tag{
+  position:absolute; left:50%; top:100%; transform:translateX(-50%);
+  margin-top:3px; padding:2px 7px; border-radius:4px; white-space:nowrap;
+  font-size:11px; font-weight:800; line-height:1.4; background:var(--deny); color:#2a0000;
+}
+.face.known .tag{background:var(--grant); color:#03210f}
+/* A face at the bottom of the frame would push its caption past the tile, which clips it -
+   the name would simply not be there, on exactly the close-up shots that matter most. When
+   there is no room below, it goes inside the box instead of nowhere. */
+.face.low .tag{top:auto; bottom:3px; margin-top:0}
 .tile.armed   .ph{color:var(--armed); background:#0c1119}
 .tile.offline .ph{color:var(--offline); background:rgba(255,92,92,.08)}
 .tile.live    .ph{display:none}
 .tile.live img,.tile.armed img,.tile.offline img{opacity:1}
 .tile.armed img,.tile.offline img{display:none}
+
+/* ---------- person popover ----------
+   Anchored to the card rather than shown as a modal, and with no backdrop, because closing it
+   means clicking the same name again - a backdrop would swallow that click. */
+.pop{
+  position:fixed; z-index:60; width:320px; max-width:calc(100vw - 20px);
+  background:var(--panel); border:1px solid var(--line); border-radius:11px;
+  box-shadow:0 20px 50px rgba(0,0,0,.65); display:none;
+}
+.pop.on{display:block}
+.pop .ph{
+  display:flex; align-items:flex-start; gap:10px;
+  padding:12px 14px; border-bottom:1px solid var(--line);
+}
+.pop .ph .nm{font-size:17px; font-weight:700; line-height:1.2}
+.pop .ph .sub{margin-top:2px; font-size:12px; color:var(--ink-dim)}
+.pop .x{
+  margin-left:auto; flex:none; width:26px; height:26px; padding:0; line-height:1;
+  font-size:17px; border-radius:6px;
+}
+.pop .sec{padding:11px 14px; border-bottom:1px solid var(--line)}
+.pop .sec:last-child{border-bottom:0}
+.pop .sec h4{
+  margin:0 0 7px; font-size:11px; font-weight:700; letter-spacing:.1em;
+  text-transform:uppercase; color:var(--ink-faint);
+}
+.pop .row{display:flex; align-items:center; gap:8px; margin-bottom:7px}
+.pop .row:last-child{margin-bottom:0}
+.pop .grow{flex:1; min-width:0}
+.pop select,.pop input{
+  font:inherit; font-size:13px; padding:6px 8px; border-radius:6px;
+  background:var(--panel2); color:var(--ink); border:1px solid var(--line);
+}
+.pop input{width:62px}
+.pop button{font-size:13px; padding:6px 11px}
+.pop button.danger{background:rgba(255,92,92,.16); border-color:rgba(255,92,92,.5); color:#ffd7d7}
+.pop .grant{
+  display:flex; align-items:center; gap:8px; padding:6px 9px; margin-bottom:6px;
+  background:var(--panel2); border:1px solid var(--line); border-radius:7px; font-size:13px;
+}
+.pop .grant .zn{font-weight:650}
+.pop .grant .ttl{margin-left:auto; color:var(--ink-dim); font-variant-numeric:tabular-nums; font-size:12px}
+.pop .grant button{padding:3px 8px; font-size:12px}
+.pop .none{font-size:13px; color:var(--ink-faint)}
+.pop .msg{font-size:12px; color:var(--warn); margin-top:7px}
 
 /* ---------- footer ---------- */
 footer{
@@ -197,6 +265,8 @@ button.arm{background:rgba(255,92,92,.18); border-color:rgba(255,92,92,.55); col
 </main>
 
 <div class="tiles" id="tiles"></div>
+
+<div class="pop" id="pop"></div>
 
 <footer>
   <div class="trail" id="trail">audit trail</div>
@@ -266,6 +336,10 @@ let people = [], nodes = [], alertCount = 0;
 
 const $ = s => document.querySelector(s);
 const hhmmss = d => d.toTimeString().slice(0,8);
+// Names and roles are typed by an admin and then written into innerHTML in several places
+// here, which is an injection route however trusted the typist is.
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c =>
+  ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 
 function tick(){ $("#clock").textContent = hhmmss(new Date()); }
 setInterval(tick, 1000); tick();
@@ -294,6 +368,7 @@ function buildTiles(){
   $("#tiles").innerHTML = NODES.map(n=>`
     <div class="tile offline" id="tile-${n.id}">
       <img id="img-${n.id}" alt="">
+      <div class="fx" id="fx-${n.id}"></div>
       <div class="ph"><span id="ph-${n.id}">offline</span></div>
       <button class="rot" data-node="${n.id}" title="Rotate this camera 90&deg;">&#8635;</button>
       <div class="lbl">${n.label}</div>
@@ -314,16 +389,57 @@ function buildTiles(){
 // One chained request per tile, and each tile is pinned to its own node for life: the old
 // build had a single preview element that silently swapped between two physical cameras,
 // which reads as "the video is glitching" (REBUILD_PROMPT §0.6.4).
+// Fetched rather than assigned straight to img.src, because the face boxes ride on a response
+// header (X-Faces) and an <img> never exposes its headers. That coupling is the point: boxes
+// and pixels arrive in one response, so a rectangle can never be drawn over a different frame
+// than the one it was measured on.
 function pump(id){
   const img = document.getElementById("img-"+id);
-  const next = () => {
+  const layer = document.getElementById("fx-"+id);
+  let shown = null;                       // object URL currently on screen, revoked once replaced
+  const again = ms => setTimeout(next, ms);
+  const next = async () => {
     const n = nodes.find(x=>x.id===id);
-    if(!n || n.state!=="live"){ setTimeout(next, 700); return; }
-    img.src = `/frame.jpg?node=${id}&t=${Date.now()}`;
+    if(!n || n.state!=="live"){ layer.innerHTML = ""; return again(700); }
+    let r;
+    try{ r = await fetch(`/frame.jpg?node=${id}&t=${Date.now()}`); }catch(e){ return again(700); }
+    if(!r.ok) return again(700);
+    let faces = [];
+    try{ faces = JSON.parse(r.headers.get("X-Faces") || "[]"); }catch(e){}
+    const url = URL.createObjectURL(await r.blob());
+    img.onload = () => {
+      if(shown) URL.revokeObjectURL(shown);
+      shown = url;
+      drawFaces(id, faces);
+      again(90);
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); again(700); };
+    img.src = url;
   };
-  img.onload = () => setTimeout(next, 90);
-  img.onerror = () => setTimeout(next, 700);
   next();
+}
+
+function drawFaces(id, faces){
+  const img = document.getElementById("img-"+id);
+  const layer = document.getElementById("fx-"+id);
+  if(!img.naturalWidth || !faces.length){ layer.innerHTML = ""; return; }
+  // The tile crops with object-fit:cover, so the overlay has to repeat that same maths:
+  // scale to fill the short side, then centre the overflow. Reading it off the rendered
+  // element instead means every box lands off the face the moment a camera is rotated.
+  const cw = img.clientWidth, ch = img.clientHeight;
+  const s = Math.max(cw / img.naturalWidth, ch / img.naturalHeight);
+  const ox = (cw - img.naturalWidth * s) / 2, oy = (ch - img.naturalHeight * s) / 2;
+  const TAG_H = 20;   // caption height plus its gap, in tile pixels
+  layer.innerHTML = faces.map(f => {
+    const known = f.confident && f.person_id != null;
+    const p = known ? people.find(q => q.id === f.person_id) : null;
+    const name = known ? (p ? p.name : "person " + f.person_id) : "Unknown";
+    const top = oy + f.y * s, h = f.h * s;
+    const low = top + h + TAG_H > ch;
+    return `<div class="face ${known ? "known" : "unknown"}${low ? " low" : ""}"
+              style="left:${ox + f.x * s}px; top:${top}px; width:${f.w * s}px; height:${h}px">
+              <span class="tag">${esc(name)}</span></div>`;
+  }).join("");
 }
 function syncTiles(){
   nodes.forEach(n=>{
@@ -332,6 +448,9 @@ function syncTiles(){
     t.className = "tile " + n.state;
     const ph = document.getElementById("ph-"+n.id);
     if(ph) ph.textContent = n.state==="armed" ? "armed · nobody in range" : "offline";
+    // The picture is hidden below, so its boxes must go with it rather than hang over a
+    // placeholder that says nobody is there.
+    if(n.state !== "live"){ const fx = document.getElementById("fx-"+n.id); if(fx) fx.innerHTML = ""; }
   });
 }
 
@@ -356,12 +475,17 @@ function renderBoard(prev){
     const cls = c==="__offsite" ? "col offsite" : c==="__unplaced" ? "col unknownzone" : "col";
     const cards = groups[c].map(p=>`
       <div class="card ${p.presence==="in"?"":"out"}" data-pid="${p.id}">
-        <div class="who">${p.name}</div>
-        <div class="meta">${p.role_name}${p.presence==="in"&&p.entry_time?" · since "+p.entry_time.slice(11,16):""}</div>
+        <div class="who">${esc(p.name)}</div>
+        <div class="meta">${esc(p.role_name)}${p.presence==="in"&&p.entry_time?" · since "+p.entry_time.slice(11,16):""}</div>
       </div>`).join("");
     return `<div class="${cls}"><header>${label}<b>${groups[c].length}</b></header>
             <div class="cards">${cards}</div></div>`;
   }).join("");
+
+  // The board is rebuilt wholesale, so an open popover's anchor was just destroyed and
+  // replaced. Re-anchor it rather than leaving it pointing at nothing while its subject
+  // slides to another column.
+  placePop();
 
   if(!prev) return;
   // FLIP: cards that changed column animate from where they were to where they are now, so a
@@ -382,6 +506,135 @@ function renderBoard(prev){
     });
   });
 }
+
+/* ---------------- person popover ----------------
+   One click on a name opens it, a second on the same name closes it, and so does the cross.
+   Everything it offers is per-person and reversible: annul the session credential, hand out a
+   just-in-time zone pass, take one back. */
+let openPid = null, popAnchor = null;
+
+function closePop(){ openPid = null; popAnchor = null; $("#pop").className = "pop"; }
+
+function placePop(){
+  const pop = $("#pop");
+  if(openPid === null) return;
+  const card = document.querySelector(`.card[data-pid="${openPid}"]`);
+  if(card) popAnchor = card;
+  if(!popAnchor) return;
+  const a = popAnchor.getBoundingClientRect(), p = pop.getBoundingClientRect();
+  const pad = 10;
+  let left = a.right + 8;
+  if(left + p.width > innerWidth - pad) left = a.left - p.width - 8;   // flip to the other side
+  if(left < pad) left = pad;                                           // and give up gracefully
+  let top = a.top;
+  if(top + p.height > innerHeight - pad) top = innerHeight - p.height - pad;
+  if(top < pad) top = pad;
+  pop.style.left = left + "px";
+  pop.style.top = top + "px";
+}
+
+function minutesLeft(expires_at){
+  // Stored UTC without a zone marker, so say so explicitly rather than letting the browser
+  // read it as local time and report an hour of access that does not exist.
+  const ms = new Date(expires_at.replace(" ", "T") + "Z") - new Date();
+  return Math.round(ms / 60000);
+}
+
+async function renderPop(){
+  const pop = $("#pop");
+  if(openPid === null) return;
+  let data;
+  try{ data = await (await fetch("/people/roster")).json(); }
+  catch(e){ pop.innerHTML = `<div class="sec"><div class="none">Could not reach the server.</div></div>`; return; }
+  const p = (data.people || []).find(q => q.id === openPid);
+  if(!p){ closePop(); return; }
+
+  const onSite = p.presence === "in";
+  const grants = (p.grants || []).map(g => {
+    const m = minutesLeft(g.expires_at);
+    return `<div class="grant"><span class="zn">${esc(g.zone)}</span>
+              <span class="ttl">${m > 0 ? m + " min left" : "lapsed"}</span>
+              <button data-ungrant="${esc(g.zone)}">Revoke</button></div>`;
+  }).join("");
+
+  pop.innerHTML = `
+    <div class="ph">
+      <div class="grow">
+        <div class="nm">${esc(p.name)}</div>
+        <div class="sub">${esc(p.role_name)} · ${onSite ? "on site" : "off site"}${
+          onSite && p.zone_name ? " · " + esc(p.zone_name) : ""}${
+          onSite && p.entry_time ? " · since " + esc(p.entry_time.slice(11,16)) : ""}</div>
+      </div>
+      <button class="x" title="Close">&times;</button>
+    </div>
+    <div class="sec">
+      <h4>Session</h4>
+      <div class="row">
+        <span class="grow">${p.has_token ? "Token issued at entry" : "No live token"}</span>
+        <button class="danger" id="pop-revoke" ${p.has_token ? "" : "disabled"}>Revoke</button>
+      </div>
+      <div class="none">Revoking voids the credential. It does not record them as having left.</div>
+    </div>
+    <div class="sec">
+      <h4>Temporary zone access</h4>
+      ${grants || `<div class="none">No temporary passes.</div>`}
+      <div class="row" style="margin-top:9px">
+        <select id="pop-zone" class="grow">
+          ${(data.zones || []).map(z => `<option value="${esc(z)}">${esc(z)}</option>`).join("")}
+        </select>
+        <input id="pop-mins" type="number" min="1" max="1440" value="15" title="Minutes">
+        <button id="pop-grant">Grant</button>
+      </div>
+      <div class="none">Passes lapse on their own; nobody has to remember to take them back.</div>
+      <div class="msg" id="pop-msg"></div>
+    </div>`;
+
+  pop.querySelector(".x").onclick = closePop;
+  const msg = t => { const m = pop.querySelector("#pop-msg"); if(m) m.textContent = t; };
+
+  pop.querySelector("#pop-revoke").onclick = async () => {
+    const r = await adminFetch(`/people/${openPid}/revoke-token`, {method:"POST"});
+    if(!r.ok) return msg("Could not revoke the token.");
+    await renderPop(); placePop(); loadPeople(false); loadTrail();
+  };
+  pop.querySelector("#pop-grant").onclick = async () => {
+    const zone = pop.querySelector("#pop-zone").value;
+    const mins = parseInt(pop.querySelector("#pop-mins").value, 10);
+    if(!(mins >= 1 && mins <= 1440)) return msg("Minutes must be between 1 and 1440.");
+    const r = await adminFetch(`/people/${openPid}/grant?zone=${encodeURIComponent(zone)}&minutes=${mins}`,
+                               {method:"POST"});
+    if(!r.ok) return msg("Could not issue the pass.");
+    await renderPop(); placePop(); loadTrail();
+  };
+  pop.querySelectorAll("[data-ungrant]").forEach(b => {
+    b.onclick = async () => {
+      const r = await adminFetch(
+        `/people/${openPid}/grant?zone=${encodeURIComponent(b.dataset.ungrant)}`, {method:"DELETE"});
+      if(!r.ok) return msg("Could not revoke the pass.");
+      await renderPop(); placePop(); loadTrail();
+    };
+  });
+}
+
+async function togglePop(pid){
+  if(openPid === pid){ closePop(); return; }
+  openPid = pid;
+  const pop = $("#pop");
+  pop.className = "pop on";
+  pop.innerHTML = `<div class="sec"><div class="none">Loading…</div></div>`;
+  placePop();
+  await renderPop();
+  placePop();
+}
+
+// Delegated, because renderBoard replaces the whole board every few seconds and any handler
+// bound to a card would be thrown away with it.
+$("#board").addEventListener("click", ev => {
+  const card = ev.target.closest(".card[data-pid]");
+  if(card) togglePop(parseInt(card.dataset.pid, 10));
+});
+addEventListener("keydown", ev => { if(ev.key === "Escape") closePop(); });
+addEventListener("resize", placePop);
 
 /* ---------------- anomaly feed ---------------- */
 function pushAlert(kind, body){

@@ -192,6 +192,17 @@ function renderNew(){
         </label>
         <button class="primary" id="do-enrol">Capture and enrol</button>
       </div>
+    </fieldset>
+    <fieldset><legend>Or enrol from a photograph</legend>
+      <div class="row">
+        <label>Picture file
+          <input id="f-photo" type="file" accept="image/*">
+          <span class="hint">Lets a new starter be on the roster before their first shift, and
+            a picture taken under decent light usually beats a corridor camera at an angle.
+            One face in the frame only, same rule as a live capture.</span>
+        </label>
+        <button id="do-enrol-photo">Enrol from file</button>
+      </div>
     </fieldset>`;
   $("do-enrol").onclick = async () => {
     const name = $("f-name").value.trim(), role = $("f-role").value, node = $("f-node").value;
@@ -203,6 +214,26 @@ function renderNew(){
     selected = j.person_id;
     await load();
   };
+  $("do-enrol-photo").onclick = () => enrolFromFile($("f-photo"), $("f-name").value.trim(), $("f-role").value);
+}
+
+/* Shared by the enrol form and an existing person's "add a sample" control: the endpoint and
+   every failure case are identical, only where the name comes from differs. */
+async function enrolFromFile(input, name, role){
+  if(!name) return say("A name is required.", false);
+  const file = input.files && input.files[0];
+  if(!file) return say("Choose a picture first.", false);
+  const body = new FormData();
+  body.append("photo", file);
+  const r = await adminFetch(
+    `/people/enroll/photo?name=${encodeURIComponent(name)}&role=${encodeURIComponent(role)}`,
+    {method:"POST", body});   // no Content-Type header: the browser sets the multipart boundary
+  const j = await r.json();
+  if(!r.ok) return say(j.error || j.detail || "Enrolment from the file failed.", false);
+  say(`Added from ${j.filename}. ${j.name} now has ${j.samples} sample(s).`, true);
+  input.value = "";
+  selected = j.person_id;
+  await load();
 }
 
 /* ---------- detail ---------- */
@@ -271,6 +302,10 @@ function renderDetail(p){
         <button id="add-sample">Capture another</button>
         <button class="danger" id="clear-samples">Clear all samples</button>
       </div>
+      <div class="row" style="margin-top:10px">
+        <label>Or from a picture file<input id="add-photo" type="file" accept="image/*"></label>
+        <button id="add-sample-photo">Add from file</button>
+      </div>
     </fieldset>
 
     <fieldset><legend>Remove</legend>
@@ -312,6 +347,7 @@ function renderDetail(p){
     const j = await r.json();
     say(r.ok ? `Captured. ${j.samples} sample(s) now.` : (j.error||j.detail||"Capture failed."), r.ok); await load();
   };
+  $("add-sample-photo").onclick = () => enrolFromFile($("add-photo"), p.name, p.role_name);
   $("clear-samples").onclick = confirmTwice("clear-samples", "Clear all samples", async () => {
     const r = await adminFetch(`/people/${p.id}/samples`, {method:"DELETE"});
     say(r.ok ? "Samples cleared." : "Failed.", r.ok); await load();

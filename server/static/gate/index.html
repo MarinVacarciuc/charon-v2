@@ -5,45 +5,99 @@
 <style>
 /* The screen propped at the gate. Since the LEDs on GPIO 1/2 were deliberately not soldered,
    this IS the physical green light in the video, so it is built to be readable at a distance
-   and unmistakable on camera: one state, filling the screen, nothing else competing.
+   and unmistakable on camera.
+
+   Two audiences, which is why there are two signals rather than one. The person walking up
+   needs to see that the camera has them, so the lane's own view fills the screen. The camera
+   recording the demonstration needs a state legible from across a room, which a border alone
+   is not, so a decision floods the whole screen with its colour for the first second and only
+   then settles back into bordered video. Neither audience is served by compromising on the
+   other's signal.
 
    Read-only by design - no admin token, no login. A terminal that needs signing in mid-take
    is a fail-secure mechanism that fails the shoot. */
-:root{ --ink:#fff; }
+:root{
+  --ink:#fff;
+  --neutral:#2c3546; --granted:#17c964; --denied:#ff4d4d;
+  --flood-granted:#0b6b34; --flood-denied:#7d1420; --flood-failsec:#5a1520;
+  --edge:6vmin;                 /* the border. Deliberately heavy: at a glance, from a distance. */
+}
 *{box-sizing:border-box}
 html,body{margin:0;height:100%;overflow:hidden;background:#000}
 body{
   font:600 16px/1.2 system-ui,-apple-system,"Segoe UI",sans-serif; color:var(--ink);
-  display:flex; align-items:center; justify-content:center; text-align:center;
-  transition:background .18s ease;
   -webkit-user-select:none; user-select:none;
 }
-body.idle    {background:#0b0e14}
-body.granted {background:#0b6b34}
-body.denied  {background:#7d1420}
-body.failsafe{background:#0b6b34}
-body.failsec {background:#5a1520}
 
-.wrap{padding:4vh 4vw; width:100%}
+/* ---------- the lane's own view ---------- */
+#cam{
+  position:fixed; inset:0; width:100%; height:100%; object-fit:cover;
+  display:none; background:#000;
+}
+body.hasvideo #cam{display:block}
+/* Without video the screen is the flood colour on its own, exactly as it was before this
+   page ever showed a picture - an offline gate must not look like a working one. */
+body.flood-idle    {background:#0b0e14}
+body.flood-failsafe{background:var(--flood-granted)}
+body.flood-failsec {background:var(--flood-failsec)}
+
+/* ---------- the border ---------- */
+#edge{
+  position:fixed; inset:0; pointer-events:none; z-index:2;
+  border:var(--edge) solid var(--neutral);
+  transition:border-color .18s ease;
+}
+body.st-granted #edge{border-color:var(--granted)}
+body.st-denied  #edge{border-color:var(--denied)}
+body.st-unknown #edge{border-color:var(--denied)}
+
+/* ---------- the flood ----------
+   One second of full-screen colour on a decision, then out of the way. */
+#flood{
+  position:fixed; inset:0; z-index:3; pointer-events:none; opacity:0; background:transparent;
+}
+#flood.go{animation:flood 1.15s ease-out forwards}
+@keyframes flood{
+  0%{opacity:1} 55%{opacity:1} 100%{opacity:0}
+}
+
+/* ---------- the words ---------- */
+#txt{
+  position:fixed; inset:var(--edge); z-index:4; pointer-events:none;
+  display:flex; flex-direction:column; align-items:center; justify-content:center;
+  text-align:center; padding:2vh 3vw; gap:1.6vh;
+}
+/* A scrim rather than a text shadow: over a moving picture, a shadow alone stops being enough
+   the moment somebody walks past in a light shirt. */
+body.hasvideo #txt{background:rgba(6,9,14,.46)}
 .state{
-  font-size:min(19vw,230px); font-weight:800; line-height:.95; letter-spacing:-.02em;
+  font-size:min(17vw,210px); font-weight:800; line-height:.95; letter-spacing:-.02em;
   text-transform:uppercase;
 }
-.who{margin-top:2.2vh; font-size:min(8vw,86px); font-weight:700}
-.sub{margin-top:2.4vh; font-size:min(3.6vw,34px); font-weight:500; opacity:.82}
-.node{
-  position:fixed; top:12px; left:16px; font-size:13px; letter-spacing:.14em;
-  text-transform:uppercase; opacity:.55; font-weight:700;
+.who{font-size:min(8vw,86px); font-weight:700; line-height:1.05}
+.role{
+  font-size:min(4.4vw,40px); font-weight:600; letter-spacing:.06em; text-transform:uppercase;
+  opacity:.9;
 }
-.link{position:fixed; bottom:10px; right:14px; font-size:12px; opacity:.4}
-.pulse{animation:pulse 1.6s ease-in-out infinite}
-@keyframes pulse{0%,100%{opacity:.5} 50%{opacity:1}}
+.sub{font-size:min(3.6vw,34px); font-weight:500; opacity:.82}
+.node{
+  position:fixed; z-index:5; top:calc(var(--edge) + 8px); left:calc(var(--edge) + 12px);
+  font-size:13px; letter-spacing:.14em; text-transform:uppercase; opacity:.6; font-weight:700;
+}
+.link{
+  position:fixed; z-index:5; bottom:calc(var(--edge) + 6px); right:calc(var(--edge) + 12px);
+  font-size:12px; opacity:.45;
+}
 </style>
 
+<img id="cam" alt="">
+<div id="flood"></div>
+<div id="edge"></div>
 <div class="node" id="node">gate</div>
-<div class="wrap">
+<div id="txt">
   <div class="state" id="state">READY</div>
   <div class="who" id="who"></div>
+  <div class="role" id="role"></div>
   <div class="sub" id="sub">waiting for someone to approach</div>
 </div>
 <div class="link" id="conn"></div>
@@ -52,70 +106,149 @@ body.failsec {background:#5a1520}
 // Which lane this screen belongs to. A terminal is bolted to ONE gate, so it never guesses -
 // same rule as the dashboard's camera tiles (REBUILD_PROMPT §0.6.4).
 const NODE = new URLSearchParams(location.search).get("node") || "gate-in";
-document.getElementById("node").textContent = NODE;
 
-const body = document.body, elState = $("state"), elWho = $("who"), elSub = $("sub"), elConn = $("conn");
 function $(id){ return document.getElementById(id); }
+const body = document.body;
+$("node").textContent = NODE;
 
-let clearTimer = null, brainOk = true, nodeOk = true;
+let clearTimer = null, brainOk = true, nodeOk = true, nodeLive = false;
+let decisionUntil = 0;        // while this is in the future, the decision owns the screen
+let roster = {};              // person_id -> {name, role}
 
-function show(cls, state, who, sub, holdMs){
+/* ---------------- what the screen says ---------------- */
+function show(o){
   clearTimeout(clearTimer);
-  body.className = cls;
-  elState.textContent = state;
-  elWho.textContent = who || "";
-  elSub.textContent = sub || "";
-  if(holdMs) clearTimer = setTimeout(idle, holdMs);
+  // Two independent class families: st-* is the border, flood-* is the background behind the
+  // video. Setting className wholesale is what keeps a stale state from surviving a change.
+  body.className = [o.st ? "st-" + o.st : "", o.flood ? "flood-" + o.flood : "",
+                    o.video ? "hasvideo" : ""].filter(Boolean).join(" ");
+  $("state").textContent = o.state || "";
+  $("who").textContent = o.who || "";
+  $("role").textContent = o.role || "";
+  $("sub").textContent = o.sub || "";
+  if(o.holdMs) clearTimer = setTimeout(paint, o.holdMs);
 }
-function idle(){
-  // Degraded states outrank idle: if the system is down, the screen must keep saying so.
+
+function flood(colourVar){
+  const f = $("flood");
+  f.style.background = `var(${colourVar})`;
+  f.classList.remove("go");
+  void f.offsetWidth;                 // restart the animation rather than skip it on a repeat
+  f.classList.add("go");
+}
+
+// The single place the screen's resting appearance is decided, re-derived from current facts
+// rather than patched from whatever happened last. A live decision outranks everything below.
+function paint(){
+  if(Date.now() < decisionUntil) return;
   if(!brainOk || !nodeOk) return degraded();
-  show("idle", "READY", "", "waiting for someone to approach");
+  if(!nodeLive) return show({flood:"idle", state:"READY", sub:"waiting for someone to approach"});
+  const f = lastFaces[0];
+  if(!f) return show({video:true, state:"READY", sub:"step in front of the camera"});
+  const known = f.confident && f.person_id != null;
+  const p = known ? roster[f.person_id] : null;
+  // UNKNOWN used to arrive as an UNIDENTIFIED_PASSAGE alert from the passage sensor. That
+  // sensor no longer votes (see recognition/gate.py), so the screen now says it because the
+  // camera is looking at a face it cannot name, which is both sooner and better evidence.
+  if(!known) return show({video:true, st:"unknown", state:"UNKNOWN", sub:"Face not recognised."});
+  return show({video:true, st:"granted", state:"SEEN",
+               who:(p ? p.name : "person " + f.person_id), role:(p ? p.role : ""),
+               sub:"Checking access."});
 }
+
 function degraded(){
   // Fail-safe on the way out, fail-secure on the way in (REBUILD_PROMPT B2): nobody is ever
   // trapped inside, and nobody is auto-admitted by a system that cannot vouch for them.
   if(NODE === "gate-out"){
-    show("failsafe", "EXIT FREE", "", "Gate offline. You may leave. Your passage is logged.");
+    show({flood:"failsafe", st:"granted", state:"EXIT FREE",
+          sub:"Gate offline. You may leave. Your passage is logged."});
   }else{
-    show("failsec", "SEE GUARD", "", "Gate offline. Entry cannot be authorised right now.");
+    show({flood:"failsec", st:"denied", state:"SEE GUARD",
+          sub:"Gate offline. Entry cannot be authorised right now."});
   }
 }
 
+/* ---------------- the lane's video ---------------- */
+// Fetched rather than assigned to img.src, because the face boxes ride on a response header
+// (X-Faces) and an <img> never exposes its headers. Here they are not drawn as rectangles;
+// they are what tells the screen whether the camera is looking at somebody it can name.
+let lastFaces = [];
+function pump(){
+  const img = $("cam");
+  let shown = null;
+  const again = ms => setTimeout(next, ms);
+  const next = async () => {
+    if(!nodeLive){ lastFaces = []; return again(700); }
+    let r;
+    try{ r = await fetch(`/frame.jpg?node=${NODE}&t=${Date.now()}`, {cache:"no-store"}); }
+    catch(e){ return again(700); }
+    if(!r.ok) return again(700);
+    try{ lastFaces = JSON.parse(r.headers.get("X-Faces") || "[]"); }catch(e){ lastFaces = []; }
+    const url = URL.createObjectURL(await r.blob());
+    img.onload = () => {
+      if(shown) URL.revokeObjectURL(shown);
+      shown = url;
+      paint();
+      again(90);
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); again(700); };
+    img.src = url;
+  };
+  next();
+}
+
+/* ---------------- health and roster ---------------- */
 async function pollHealth(){
   try{
-    const r = await fetch("/nodes", {cache:"no-store"});
-    const n = (await r.json()).nodes.find(x => x.id === NODE);
+    const n = (await (await fetch("/nodes", {cache:"no-store"})).json()).nodes.find(x => x.id === NODE);
     brainOk = true;
     nodeOk = !!n && n.online;
-    elConn.textContent = nodeOk ? "" : NODE + " offline";
+    nodeLive = !!n && n.state === "live";
+    $("conn").textContent = nodeOk ? "" : NODE + " offline";
   }catch(e){
-    brainOk = false;                    // the brain itself is unreachable
-    elConn.textContent = "brain unreachable";
+    brainOk = false; nodeLive = false;   // the brain itself is unreachable
+    $("conn").textContent = "brain unreachable";
   }
-  if((!brainOk || !nodeOk) && !body.className.startsWith("fail")) degraded();
-  else if(brainOk && nodeOk && body.className.startsWith("fail")) idle();
+  paint();
 }
 
+// Names for faces the camera recognises before any decision has been issued. Read-only route,
+// so this needs no token; refreshed on a slow timer because an enrolment mid-shift should
+// reach this screen without someone reloading a phone propped on a windowsill.
+async function pollRoster(){
+  try{
+    const ps = (await (await fetch("/people", {cache:"no-store"})).json()).people;
+    roster = Object.fromEntries(ps.map(p => [p.id, {name:p.name, role:p.role_name}]));
+  }catch(e){}
+}
+
+/* ---------------- decisions ---------------- */
+const HOLD_MS = 6000;
 function connect(){
   const es = new EventSource("/events");
   es.onmessage = e => {
     let d; try{ d = JSON.parse(e.data); }catch(_){ return; }
-    if(d.type !== "alert" || d.node !== NODE) return;
-    if(d.kind === "gate_decision"){
-      const who = (d.message || "").split(":")[0];
-      if(d.granted) show("granted", "GRANTED", who, "Welcome.", 6000);
-      else          show("denied",  "DENIED",  who, "Access is not authorised.", 6000);
-    }else if(d.kind === "unidentified_passage"){
-      show("denied", "UNKNOWN", "", "Unrecognised passage.", 5000);
-    }else if(d.kind === "denied_crossed"){
-      show("denied", "DENIED", (d.message||"").split(":")[0], "Passage recorded without authorisation.", 6000);
+    if(d.type !== "alert" || d.node !== NODE || d.kind !== "gate_decision") return;
+    // person_name and person_role are their own fields now; the old page dug the name out of
+    // `message` by splitting on a colon, which a name containing one would have broken.
+    const who = d.person_name || "", role = d.person_role || "";
+    decisionUntil = Date.now() + HOLD_MS;
+    if(d.granted){
+      show({video:true, st:"granted", state:"GRANTED", who, role, sub:"Welcome.", holdMs:HOLD_MS});
+      flood("--flood-granted");
+    }else{
+      show({video:true, st:"denied", state:"DENIED", who, role,
+            sub:d.reason ? "Not authorised: " + d.reason : "Access is not authorised.",
+            holdMs:HOLD_MS});
+      flood("--flood-denied");
     }
   };
+  es.onerror = () => {};   // EventSource reconnects on its own - that is why this is SSE
 }
 
-idle();
-pollHealth();
-setInterval(pollHealth, 2000);
+paint();
+pollHealth(); setInterval(pollHealth, 2000);
+pollRoster(); setInterval(pollRoster, 30000);
+pump();
 connect();
 </script>
