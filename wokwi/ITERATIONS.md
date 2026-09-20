@@ -162,7 +162,8 @@ by it. Everything above this line was given; everything in this iteration was de
 the specific limitation iteration 3 exposed - see `PROMPT_rebuild_iterations.md` for the design
 brief this was originally built against (written for the keypad version; the RFID rebuild answers
 the same brief with a different credential, not a different problem).
-**Built:** added an MFRC522 RFID reader and a 16x2 I2C LCD. Approach within 80 cm now triggers a
+**Built:** added an MFRC522 RFID reader and a 16x2 parallel LCD (six data/control lines, not
+I2C, matching the brief's own System Three wiring). Approach within 80 cm now triggers a
 "Present Card" prompt instead of a graded alarm; a recognised UID lights the green LED and shows
 "Access Granted". Three deliberate design choices answer limitations named at iteration 3 and
 earlier rather than being generic reader-and-alarm features:

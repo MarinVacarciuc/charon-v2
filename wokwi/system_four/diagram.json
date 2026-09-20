@@ -5,7 +5,7 @@
   "parts": [
     { "type": "wokwi-arduino-uno", "id": "uno", "top": 0, "left": 0, "attrs": {} },
     { "type": "wokwi-hc-sr04", "id": "ultrasonic1", "top": -100, "left": 200, "attrs": {} },
-    { "type": "wokwi-lcd1602", "id": "lcd1", "top": -260, "left": -20, "attrs": { "pins": "i2c" } },
+    { "type": "wokwi-lcd1602", "id": "lcd1", "top": -260, "left": -20, "attrs": { "pins": "full" } },
     { "type": "board-mfrc522", "id": "rfid1", "top": -160, "left": 480, "attrs": {} },
 
     { "type": "wokwi-resistor", "id": "r_armed", "top": 120, "left": 460, "attrs": { "value": "220" }, "rotate": 90 },
@@ -22,10 +22,18 @@
     [ "uno:2", "ultrasonic1:TRIG", "green", [] ],
     [ "uno:3", "ultrasonic1:ECHO", "yellow", [] ],
 
-    [ "uno:5V", "lcd1:VCC", "red", [] ],
-    [ "uno:GND.2", "lcd1:GND", "black", [] ],
-    [ "uno:A4", "lcd1:SDA", "blue", [] ],
-    [ "uno:A5", "lcd1:SCL", "cyan", [] ],
+    [ "lcd1:VSS", "uno:GND.2", "black", [] ],
+    [ "lcd1:VDD", "uno:5V", "red", [] ],
+    [ "lcd1:V0", "uno:GND.2", "black", [] ],
+    [ "lcd1:RS", "uno:7", "green", [] ],
+    [ "lcd1:RW", "uno:GND.2", "black", [] ],
+    [ "lcd1:E", "uno:8", "green", [] ],
+    [ "lcd1:D4", "uno:A0", "blue", [] ],
+    [ "lcd1:D5", "uno:A1", "blue", [] ],
+    [ "lcd1:D6", "uno:A2", "blue", [] ],
+    [ "lcd1:D7", "uno:A3", "blue", [] ],
+    [ "lcd1:A", "uno:5V", "red", [] ],
+    [ "lcd1:K", "uno:GND.2", "black", [] ],
 
     [ "uno:3.3V", "rfid1:3.3V", "red", [] ],
     [ "uno:GND.3", "rfid1:GND", "black", [] ],

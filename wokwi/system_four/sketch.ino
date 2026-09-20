@@ -40,13 +40,14 @@
      project's later, server-backed iterations exist to fill (see the project report).
 
   Wiring: Arduino Uno, HC-SR04 (TRIG D2, ECHO D3), MFRC522 RFID reader (SDA D10, SCK D13,
-  MOSI D11, MISO D12, RST D9, VCC 3.3V, GND GND), 16x2 I2C LCD (SDA A4, SCL A5), a green
-  "armed" LED (D5) and a red "alarm/lockout" LED (D6) each through a ~220R resistor, and a
-  buzzer (D4). See diagram.json for the exact wiring definition.
+  MOSI D11, MISO D12, RST D9, VCC 3.3V, GND GND), 16x2 parallel LCD - not I2C (RS D7, E D8,
+  D4-D7 on A0-A3, per the assignment brief's six-wire requirement), a green "armed" LED (D5)
+  and a red "alarm/lockout" LED (D6) each through a ~220R resistor, and a buzzer (D4). See
+  diagram.json for the exact wiring definition.
 */
 #include <SPI.h>
 #include <MFRC522.h>
-#include <LiquidCrystal_I2C.h>
+#include <LiquidCrystal.h>
 
 #define trigPin 2
 #define echoPin 3
@@ -57,7 +58,7 @@
 #define RST_PIN 9
 
 MFRC522 rfid(SS_PIN, RST_PIN);
-LiquidCrystal_I2C lcd(0x27, 16, 2);
+LiquidCrystal lcd(7, 8, A0, A1, A2, A3);  // RS, E, D4, D5, D6, D7 - parallel LCD, not I2C
 
 const int entryZone = 80;
 const int maxAttempts = 3;
@@ -155,8 +156,7 @@ void setup() {
   SPI.begin();
   rfid.PCD_Init();
 
-  lcd.init();
-  lcd.backlight();
+  lcd.begin(16, 2);
   lcd.setCursor(0, 0);
   lcd.print("Ezra & Korede");
   lcd.setCursor(0, 1);
