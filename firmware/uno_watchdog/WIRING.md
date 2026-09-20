@@ -10,7 +10,8 @@ Both boards must run from the **same power bank**. Not because of power, but bec
 need a **common ground** - see the very first warning below.
 
 You need: the Uno, the MFRC522 reader + at least one card, a spare RCWL-1601, a buzzer, a
-green and a red LED, two ~330R resistors, and jumper wire.
+green and a red LED, two ~330R resistors, four momentary push buttons (the PIN pad), and
+jumper wire.
 
 ---
 
@@ -93,28 +94,59 @@ anything is broken.
 
 ---
 
-## 5. Enrol your cards
+## 5. The PIN pad (second factor, added 2026-09-20)
 
-Card UIDs are not known in advance, so you read them off the board:
+Four plain momentary push buttons, each wired between the pin and GND - no resistors, the
+sketch enables the internal pull-ups.
+
+| Button | Uno |
+|---|---|
+| BTN1 | A0 |
+| BTN2 | A1 |
+| BTN3 | A2 |
+| BTN4 | A3 |
+
+Why four buttons and not a numeric keypad: a 3x4 or 4x4 matrix needs seven or eight free GPIO,
+and this board does not have that many left once the heartbeat input, the RFID/SPI bus, the
+sonar, the LEDs and the buzzer are wired. Four discrete buttons give a second factor - a short
+sequence known only to the cardholder - inside the pins that are actually free.
+
+**Check it:** with no card presented, pressing buttons does nothing - the pad is only read
+while a valid card's PIN window is open. That is deliberate: it stops a stray press outside a
+real attempt from being replayed as the start of the next one.
+
+---
+
+## 6. Enrol your cards and their PINs
+
+Card UIDs are not known in advance, so you read them off the board; PINs are agreed with the
+cardholder and never printed by the reader.
 
 1. Flash the sketch, open the serial monitor at 9600.
 2. Pull the heartbeat wire so the board goes into failover (`SMART_DOWN`). The reader is
    deliberately inert while the smart system is alive.
 3. Tap a card. You get `DENY,...,card not on this board's list: 04 A3 19 2B`.
-4. Copy that UID into `cards.h`:
+4. Decide a PIN with the cardholder - a sequence of button presses, e.g. BTN3, BTN1, BTN4,
+   BTN2 - and copy the UID and the PIN into `cards.h`:
    ```c
+   static const uint8_t MARIN_PIN[] = {2, 0, 3, 1};   // BTN3, BTN1, BTN4, BTN2
    static const CharonCard CHARON_CARDS[] = {
-     {"04 A3 19 2B", "Marin"},
+     {"04 A3 19 2B", "Marin", MARIN_PIN, 4},
    };
    ```
-5. Re-flash. Tap again: `PASS,...,card accepted: Marin`, green light, short chirp.
+5. Re-flash. Tap the card: `PIN_WAIT,...,card recognised, enter PIN: Marin`, one short chirp.
+   Press the four buttons in order within 6 seconds: `PASS,...,card + PIN accepted: Marin`,
+   green light. A wrong button, or running out of time, gives `PIN_FAIL,...` and the red light
+   instead - nothing is granted on the card alone any more.
 
 `cards.h` is gitignored on purpose. A card UID is a credential: anyone who knows one can write
-it to a blank card.
+it to a blank card. The PIN is not derived from anything the reader can print out, so writing
+it down here is the only record of it outside the cardholder's memory - treat the file with
+the same care as a password list, because that is what it now is.
 
 ---
 
-## 6. Full check, in order
+## 7. Full check, in order
 
 Power both boards from the bank, serial monitor open at 9600.
 
@@ -123,13 +155,16 @@ Power both boards from the bank, serial monitor open at 9600.
 2. Pull the heartbeat wire. Within ~3 s: `SMART_DOWN`, red LED on.
 3. Walk up to the ultrasonic. `APPROACH,...,waiting for a card`. Nothing opens.
 4. Wait ~8 s without tapping. `NO_CARD,...,approach with no card presented`.
-5. Tap a known card. `PASS`, green LED, chirp.
-6. Tap an unknown card. `DENY`, red, and the UID printed.
-7. Reconnect the heartbeat. `SMART_UP` within ~3 s, red goes out.
+5. Tap a known card and enter its correct PIN within 6 s. `PASS`, green LED, chirp.
+6. Tap the same card and enter a wrong PIN, or let the window expire. `PIN_FAIL`, red LED -
+   the card alone did not open anything.
+7. Tap an unknown card. `DENY`, red, and the UID printed - no PIN is requested for a card that
+   is not on the list at all.
+8. Reconnect the heartbeat. `SMART_UP` within ~3 s, red goes out.
 
-If all seven behave, Layer 3 is done and the last beat of the video is filmable.
+If all eight behave, Layer 3 is done and the last beat of the video is filmable.
 
-## 7. The failover journal
+## 8. The failover journal
 
 Everything this board decides happens while the brain is unreachable, so none of it would
 otherwise be recoverable. The Uno keeps its own journal in EEPROM - 113 records, surviving

@@ -631,8 +631,8 @@ failed.**
 
 A synthesis does survive the first two objections: deliver the code **in advance**, while
 everything is healthy, rotating it periodically, so it is already on the phone before the
-failure. It still needs a keypad the project does not have, and it still needs a channel to
-the Uno for the matching secret.
+failure. It still needs a channel to the Uno for the matching secret, which this board does
+not have by design - see the decision below on why that channel was never added.
 
 The more elegant variant, and the one worth naming as future work: rotate the secret **on the
 card itself**, rewritten by the reader during a normal healthy passage. MIFARE Classic sectors
@@ -645,12 +645,55 @@ needs no network, no internet, no charged phone and no delivery. The card has al
 alternative examined trades one of them away for rotation. Rotation is the right thing to want
 and the wrong thing to buy at that price.
 
+### A second factor for the failover credential, 2026-09-20
+
+**Status: built.** Recorded because the reason for this change is not "the design was wrong" -
+it is a consequence of a decision made elsewhere in the project, and that dependency is worth
+making explicit rather than leaving the two changes looking coincidental.
+
+Iteration 4's own Uno prototype (the everyday, staffed, monitored entrance) was rebuilt this
+same day from a keypad PIN to an RFID card - see `wokwi/ITERATIONS.md`. That removed the
+distinction the failover section had been resting on: "iteration 4 is a keypad, the failover is
+a card reader" stops being true the moment both are card readers. Two ways to restore a real
+distinction were considered.
+
+**Option A: give the failover a different credential type entirely** (a keypad, since iteration
+4 just vacated it, or a DIP-switch code). Rejected: it would restore a *visible* difference
+without addressing anything about *why* the two boards should differ. The honest distinction
+between iteration 4 and this failover was never "which sensor they use" - it is that one is the
+door everyone uses every day, watched, and the other is what stands in when nothing smarter is
+watching anything. A credential swap for its own sake would have been solving the wrong problem.
+
+**Option B: strengthen this board's credential instead, since its actual job justifies it.**
+Accepted. The failover now requires the known card **and** a short PIN unique to that card,
+entered on four buttons (`firmware/uno_watchdog/WIRING.md`) within 6 seconds of a good tap. A
+card alone is "something you have" and clonable by anyone who reads its UID - `cards.h` says so
+on its own first line. Requiring "something you know" as well is a genuine increase in
+assurance, and it is well-motivated specifically *because* this is the last line of defence: an
+attacker exploiting the one window when the smart system, its camera and its zone rules are all
+dead is exactly the scenario worth asking more of, not less, especially with no operator
+watching a dashboard to notice a bare-UID clone being tried.
+
+**Why not per-card PINs mirrored from a company badge system or similar:** out of scope for a
+board with no network and no server relationship of its own - the whole point of `cards.h` is
+that it is compiled in with nothing to synchronise against. A locally-agreed PIN, set once when
+each card is enrolled, keeps that same no-dependency property; a PIN that had to be issued or
+rotated from anywhere else would reintroduce the exact channel-to-the-Uno problem the rotating-
+credential idea above was rejected for.
+
+**What this costs, stated rather than hidden:** enrolling a card is no longer copying one UID
+into `cards.h` - it is agreeing a PIN with that person as well, and forgetting it locks a
+legitimate holder out of the *only* path in during an outage, with nobody watching to notice and
+let them in another way. That is a real, if small, addition to the fail-secure-vs-fail-open cost
+already named for this layer, and it is accepted for the same reason the lockout itself was: the
+board that only matters when everything else has failed is not the place to make entry easier.
+
 ### The Uno's card list is a mirror, and mirrors go stale
 
-`cards.h` is the Uno's own copy of UID-to-name, compiled into the firmware because the board
-has no network and nobody to ask. That has a consequence worth stating plainly rather than
-discovering later: **suspending someone on the server does not reach the Uno.** During an
-outage, a revoked person's card still opens the gate.
+`cards.h` is the Uno's own copy of UID-to-name (and, since 2026-09-20, UID-to-PIN), compiled
+into the firmware because the board has no network and nobody to ask. That has a consequence
+worth stating plainly rather than discovering later: **suspending someone on the server does
+not reach the Uno.** During an outage, a revoked person's card and PIN still open the gate.
 
 This is the classic offline-door-reader problem and it has no clean answer without a channel,
 which is the same trade examined above. It is bounded in practice - it only applies while the

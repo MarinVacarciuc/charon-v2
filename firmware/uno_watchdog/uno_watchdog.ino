@@ -19,6 +19,19 @@
   Degrading from "who you are" to "what you carry" is the honest trade. The system loses
   convenience and gains nothing it did not have; it does not lose the ability to say no.
 
+  WHAT CHANGED WHEN THE SECOND FACTOR ARRIVED (2026-09-20)
+  Iteration 4's own Uno prototype moved to an RFID card for its everyday, staffed, monitored
+  entrance. That took away the one thing that used to make this board's job visibly different
+  on paper: two boards checking the same kind of card, at different times, are easy to mistake
+  for the same design wearing two names. A card alone is also honestly weak - a UID is
+  "something you have", and cards.h says on its own first line that anyone who reads a UID can
+  write it to a blank card. This board now also asks for a short button sequence known only to
+  the cardholder, entered on four buttons after a correct tap: "what you carry" and "what you
+  know" together, which a bare-UID clone cannot satisfy on its own. That is a genuine increase
+  in assurance, not busywork to look different for the report - the one board that only gets
+  used once everything smarter than it has already died is a reasonable place to require more
+  proof than the door people walk through every day, not less.
+
   WIRING (the Uno and gate-in share a power bank, so they share a ground)
     D2   <- heartbeat from gate-in GPIO 21. 3.3 V into a 5 V-tolerant input, ONE DIRECTION.
             Never wire the reverse: 5 V into an ESP32 GPIO destroys it.
@@ -30,6 +43,8 @@
     D7   -> buzzer                (moved off D10, which SPI needs)
     D8   -> green LED via ~330R   D9 -> red LED via ~330R
     D10  -> MFRC522 SDA/SS        D11 -> MOSI    D12 <- MISO    D13 -> SCK
+    A0-A3 -> four push buttons (the PIN pad), other leg to GND. INPUT_PULLUP is used in
+            software, so no external resistor is needed - a plain momentary button per pin.
     MFRC522 VCC -> 3.3 V, NOT 5 V. Its logic tolerates the Uno's 5 V signalling, its supply
     does not.
 */
@@ -47,6 +62,11 @@ const uint8_t PIN_BUZZ  = 7;
 const uint8_t PIN_GREEN = 8;
 const uint8_t PIN_RED   = 9;
 const uint8_t PIN_RFID_SS = 10;
+const uint8_t PIN_BTN[4] = { A0, A1, A2, A3 };   // second factor: four buttons, not a 12-key
+                                                  // pad - a matrix keypad needs eight free GPIO
+                                                  // this board's pin budget does not have once
+                                                  // RFID/SPI, sonar, LEDs, buzzer and the
+                                                  // heartbeat input are accounted for.
 
 // ---- timings ----
 // Three missed beats before declaring the smart path down. One missed beat is noise; this is
@@ -59,6 +79,8 @@ const unsigned long BUZZ_MS          = 120;
 const unsigned long SONAR_PERIOD_MS  = 60;
 const unsigned long SAME_CARD_MS     = 3000;   // ignore a card held against the reader
 const unsigned long APPROACH_WAIT_MS = 8000;   // approach with no card within this = recorded
+const unsigned long PIN_WINDOW_MS    = 6000;   // time allowed to enter the PIN after a good tap
+const unsigned long BTN_DEBOUNCE_MS  = 30;
 
 // ---- ultrasonic ----
 const int TRIP_CM = 120;
@@ -82,6 +104,16 @@ unsigned long passUntil = 0, denyUntil = 0, buzzUntil = 0, lastPingMs = 0;
 unsigned long approachAt = 0;           // 0 = nobody currently waiting unidentified
 char lastUid[32] = "";
 unsigned long lastUidAt = 0;
+
+// ---- second-factor (PIN) state ----
+bool awaitingPin = false;
+const CharonCard *pendingCard = nullptr;
+byte pendingUid[10];
+byte pendingUidLen = 0;
+uint8_t pinProgress = 0;
+unsigned long pinDeadline = 0;
+bool prevBtnLow[4] = { false, false, false, false };
+unsigned long lastBtnMs = 0;
 
 
 /* ------------------------------------------------------------------ failover journal
@@ -114,9 +146,10 @@ const uint16_t EE_MAGIC      = 0x4348; // 'CH'
 const uint8_t  REC_SIZE      = 9;      // 4 uid + 4 seconds + 1 outcome
 const uint8_t  EE_CAPACITY   = (uint8_t)((1024 - EE_DATA_ADDR) / REC_SIZE);
 
-const uint8_t OUT_GRANT   = 1;
-const uint8_t OUT_DENY    = 2;
-const uint8_t OUT_NO_CARD = 3;
+const uint8_t OUT_GRANT    = 1;
+const uint8_t OUT_DENY     = 2;
+const uint8_t OUT_NO_CARD  = 3;
+const uint8_t OUT_PIN_FAIL = 4;   // right card, wrong (or no) PIN within the window
 
 uint8_t journalHead = 0;      // next slot to write
 bool journalWrapped = false;  // the ring has been round at least once
@@ -187,7 +220,8 @@ void journalDump() {
     uint8_t outcome = EEPROM.read(addr + 8);
     Serial.print(','); Serial.print(secs); Serial.print(',');
     Serial.println(outcome == OUT_GRANT ? F("granted")
-                 : outcome == OUT_DENY  ? F("denied") : F("approach_no_card"));
+                 : outcome == OUT_DENY  ? F("denied")
+                 : outcome == OUT_PIN_FAIL ? F("pin_fail") : F("approach_no_card"));
   }
   Serial.println(F("JOURNAL_END"));
 }
@@ -265,16 +299,16 @@ void uidToString(char *out, size_t n) {
   }
 }
 
-const char *holderFor(const char *uid) {
+const CharonCard *cardFor(const char *uid) {
   for (int i = 0; i < CHARON_CARD_COUNT; i++)
-    if (strcasecmp(uid, CHARON_CARDS[i].uid) == 0) return CHARON_CARDS[i].holder;
+    if (strcasecmp(uid, CHARON_CARDS[i].uid) == 0) return &CHARON_CARDS[i];
   return nullptr;
 }
 
-void grant(const char *holder, unsigned long now) {
+void grant(const char *holder, const byte *uid, byte uidLen, unsigned long now) {
   Serial.print(F("PASS,")); Serial.print(now);
-  Serial.print(F(",card accepted: ")); Serial.println(holder);
-  journalWrite(rfid.uid.uidByte, rfid.uid.size, OUT_GRANT, now);
+  Serial.print(F(",card + PIN accepted: ")); Serial.println(holder);
+  journalWrite(uid, uidLen, OUT_GRANT, now);
   passUntil = now + PASS_HOLD_MS;
   buzzUntil = now + BUZZ_MS;
   approachAt = 0;                        // identified: no unattended-approach record needed
@@ -285,10 +319,52 @@ void refuse(const char *uid, unsigned long now) {
   // number off the serial monitor, put it in cards.h.
   Serial.print(F("DENY,")); Serial.print(now);
   Serial.print(F(",card not on this board's list: ")); Serial.println(uid);
-  journalWrite(rfid.uid.uidByte, rfid.uid.size, OUT_DENY, now);
+  byte raw[10]; byte len = rfid.uid.size < sizeof(raw) ? rfid.uid.size : sizeof(raw);
+  memcpy(raw, rfid.uid.uidByte, len);
+  journalWrite(raw, len, OUT_DENY, now);
   denyUntil = now + DENY_HOLD_MS;
   buzzUntil = now + BUZZ_MS;
   approachAt = 0;
+}
+
+void beginPinEntry(const CharonCard *card, unsigned long now) {
+  pendingCard = card;
+  pendingUidLen = rfid.uid.size < sizeof(pendingUid) ? rfid.uid.size : sizeof(pendingUid);
+  memcpy(pendingUid, rfid.uid.uidByte, pendingUidLen);
+  pinProgress = 0;
+  awaitingPin = true;
+  pinDeadline = now + PIN_WINDOW_MS;
+  Serial.print(F("PIN_WAIT,")); Serial.print(now);
+  Serial.print(F(",card recognised, enter PIN: ")); Serial.println(card->holder);
+  buzzUntil = now + 40;   // one short chirp: the card was good, the PIN is still due
+}
+
+void pinFail(unsigned long now, const __FlashStringHelper *why) {
+  Serial.print(F("PIN_FAIL,")); Serial.print(now);
+  Serial.print(F(",")); Serial.print(why);
+  Serial.print(F(": ")); Serial.println(pendingCard->holder);
+  journalWrite(pendingUid, pendingUidLen, OUT_PIN_FAIL, now);
+  denyUntil = now + DENY_HOLD_MS;
+  buzzUntil = now + BUZZ_MS;
+  awaitingPin = false;
+  pendingCard = nullptr;
+}
+
+// Returns the button index (0-3) on a fresh, debounced press, or -1 if none. Keeps
+// prevBtnLow current even when the caller ignores the result, so a press made while the
+// board was not listening cannot be replayed as a "fresh" press once it starts listening.
+int8_t pollButtons(unsigned long now) {
+  int8_t pressed = -1;
+  bool debounceOk = (now - lastBtnMs) >= BTN_DEBOUNCE_MS;
+  for (uint8_t i = 0; i < 4; i++) {
+    bool low = digitalRead(PIN_BTN[i]) == LOW;
+    if (low && !prevBtnLow[i] && debounceOk && pressed < 0) {
+      pressed = (int8_t)i;
+      lastBtnMs = now;
+    }
+    prevBtnLow[i] = low;
+  }
+  return pressed;
 }
 
 void setup() {
@@ -298,6 +374,7 @@ void setup() {
   pinMode(PIN_BUZZ, OUTPUT);  digitalWrite(PIN_BUZZ, LOW);
   pinMode(PIN_GREEN, OUTPUT); digitalWrite(PIN_GREEN, LOW);
   pinMode(PIN_RED, OUTPUT);   digitalWrite(PIN_RED, LOW);
+  for (uint8_t i = 0; i < 4; i++) pinMode(PIN_BTN[i], INPUT_PULLUP);
 
   attachInterrupt(digitalPinToInterrupt(PIN_HB), onHeartbeat, CHANGE);
 
@@ -335,6 +412,7 @@ void loop() {
       Serial.println(F(",heartbeat present - standing down"));
       digitalWrite(PIN_RED, LOW);
       approachAt = 0;
+      awaitingPin = false; pendingCard = nullptr;   // the smart path came back mid-PIN-entry
     } else {
       Serial.print(F("SMART_DOWN,")); Serial.print(now);
       Serial.println(F(",no heartbeat - this board now owns the gate"));
@@ -361,24 +439,51 @@ void loop() {
 
   // Somebody came to the gate during an outage and never identified themselves. Worth a line
   // in the log: this is the signal the presence-only version threw away by simply opening.
-  if (approachAt && (long)(now - approachAt - APPROACH_WAIT_MS) >= 0) {
+  if (approachAt && !awaitingPin && (long)(now - approachAt - APPROACH_WAIT_MS) >= 0) {
     Serial.print(F("NO_CARD,")); Serial.print(now);
     Serial.println(F(",approach with no card presented"));
     { byte none[4] = {0, 0, 0, 0}; journalWrite(none, 4, OUT_NO_CARD, now); }
     approachAt = 0;
   }
 
-  // The reader only acts while the smart path is down. With the brain alive this board stays
-  // quiet on purpose: two systems deciding one gate is worse than either alone.
-  if (!smartPathUp && rfid.PICC_IsNewCardPresent() && rfid.PICC_ReadCardSerial()) {
+  // Second-factor entry in progress: the PIN pad owns the next few seconds and the reader is
+  // not consulted again until it resolves, one way or the other.
+  if (awaitingPin) {
+    if ((long)(now - pinDeadline) >= 0) {
+      pinFail(now, F("PIN not completed in time"));
+    } else {
+      int8_t pressed = pollButtons(now);
+      if (pressed >= 0) {
+        if (pressed == pendingCard->pin[pinProgress]) {
+          pinProgress++;
+          buzzUntil = now + 40;
+          if (pinProgress >= pendingCard->pinLen) {
+            grant(pendingCard->holder, pendingUid, pendingUidLen, now);
+            awaitingPin = false;
+            pendingCard = nullptr;
+          }
+        } else {
+          pinFail(now, F("wrong PIN button"));
+        }
+      }
+    }
+  } else {
+    pollButtons(now);   // keep debounce state current so a stray press outside a PIN
+                         // window cannot be replayed as the first digit of the next one
+  }
+
+  // The reader only acts while the smart path is down and no PIN entry is already in flight.
+  // With the brain alive, or mid-PIN, this board stays quiet on purpose: two systems (or two
+  // simultaneous taps) deciding one gate is worse than either alone.
+  if (!smartPathUp && !awaitingPin && rfid.PICC_IsNewCardPresent() && rfid.PICC_ReadCardSerial()) {
     char uid[32];
     uidToString(uid, sizeof(uid));
     bool repeat = (strcmp(uid, lastUid) == 0) && ((long)(now - lastUidAt) < (long)SAME_CARD_MS);
     strncpy(lastUid, uid, sizeof(lastUid) - 1);
     lastUidAt = now;
     if (!repeat) {
-      const char *holder = holderFor(uid);
-      if (holder) grant(holder, now); else refuse(uid, now);
+      const CharonCard *card = cardFor(uid);
+      if (card) beginPinEntry(card, now); else refuse(uid, now);
     }
     rfid.PICC_HaltA();
   }

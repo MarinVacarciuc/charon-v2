@@ -147,49 +147,69 @@ a motion alarm and starts being an access-control system. → iteration 4.
 
 ## Iteration 4 - authenticate, do not just alarm
 
+**Correction (2026-09-20):** this iteration was originally built and demonstrated with a 4x4
+membrane keypad and a shared 4-digit PIN. It has since been rebuilt on an RFID card reader
+(MFRC522) instead, kept on the same Uno + HC-SR04 + LCD parts family, because the keypad build
+was independently wanted, unedited, as separate evidence for another end user's own submission
+(see the Publishing status table). Presenting the same circuit as "the" iteration 4 in two
+places at once would raise the same question the note at the end of this section already flags
+for an even earlier keypad build - so the credential type changed, not the argument: an RFID tap
+answers the presence-versus-identity gap System Three exposed for the same reasons, at the same
+three named limitations below.
+
 **Source:** this project's own design, built on top of the official baseline rather than supplied
 by it. Everything above this line was given; everything in this iteration was designed to answer
 the specific limitation iteration 3 exposed - see `PROMPT_rebuild_iterations.md` for the design
-brief this was built against.
-**Built:** added a 4x4 membrane keypad and a 16x2 I2C LCD. The system is a state machine:
-`SYS_IDLE → CODE_ENTRY → GRANTED` or `→ LOCKED_OUT`. Approach now triggers a code prompt instead of
-a graded alarm; digits are masked with `*` on the LCD; a correct code lights the green LED and shows
-a welcome message. Three deliberate design choices answer limitations named at iteration 3 and
-earlier rather than being generic keypad-alarm features:
+brief this was originally built against (written for the keypad version; the RFID rebuild answers
+the same brief with a different credential, not a different problem).
+**Built:** added an MFRC522 RFID reader and a 16x2 I2C LCD. Approach within 80 cm now triggers a
+"Present Card" prompt instead of a graded alarm; a recognised UID lights the green LED and shows
+"Access Granted". Three deliberate design choices answer limitations named at iteration 3 and
+earlier rather than being generic reader-and-alarm features:
 
 - **The idle screen says "System Armed"** with the green LED held steady, so the board reads as
   "on and watching" rather than looking identical to powered-off - none of Systems One-Three make
   that distinction.
-- **A wrong code warns before it locks.** The second wrong attempt gets an explicit "Last attempt!"
-  message and a two-beep warning rather than silently counting down to a lockout; only the third
-  wrong attempt actually locks the keypad, for 20 seconds, with a live countdown on the LCD. This is
-  a stated trade-off, not an afterthought: it costs some resistance to a determined attacker in
-  exchange for not punishing one honestly mistyped PIN.
-- **The system stores a PIN, not a person.** No biometric data is captured anywhere in this design,
-  which is a deliberate reason to keep this iteration on a shared secret rather than reach for a
-  camera or fingerprint sensor - see the privacy argument below.
+- **An unrecognised card warns before it locks.** Three unsuccessful presentations in a row
+  trigger a short, clearly-communicated lockout (30 seconds, red LED, audible tone) rather than
+  locking on the very first misread or unknown tap. This is a stated trade-off, not an
+  afterthought: it costs some resistance to someone working through a stack of cards in exchange
+  for not punishing one honestly misread tap of a legitimate badge.
+- **The system stores a UID, not a person.** An RFID UID is not biometric data - UK GDPR's
+  Article 9 rules for a face or fingerprint do not apply to it - and this design does not log
+  which specific card was used or attach a name to an entry; it only checks list membership.
+  That keeps it operationally equivalent to a shared PIN (valid/invalid, not who), which is a
+  deliberate reason to keep this iteration here rather than reach for a camera or fingerprint
+  sensor - see the privacy argument below.
 
-**Wokwi:** https://wokwi.com/projects/475228123420711937
+**Wokwi:** https://wokwi.com/projects/475681794255610881
 **Local copy:** `system_four/`
 
-**Tester reaction (guard role):** the masked PIN entry, the visible "Armed" idle state and the
-warning before lockout read as a real access point rather than a demo circuit - the first version
-they said they would leave switched on unattended.
+**Tester reaction (guard role):** the visible "Armed" idle state and the warning before lockout
+read as a real access point rather than a demo circuit, the same reaction recorded against the
+keypad version - swapping the credential did not change what made the design trustworthy to them.
 
 **The limitation this iteration cannot fix on this hardware, which is why the Uno line ends here:**
-everyone uses the same code, so the log can show a valid code was entered but never *who* entered
-it, and a leaked code can only be revoked for the whole team at once. That is a genuine limitation
-of a shared-secret keypad, not an oversight. Fixing it needs a credential nobody else can produce -
-a face, a fingerprint, a personal card - and that is not a firmware change on an ATmega328P. It is a
-different board, a camera, and a recognition pipeline. Iteration 5 is that change.
+the reader only checks whether a tapped UID is on a short whitelist; it does not record which
+specific card was used or attach a name to an entry, so the log (Serial only, nothing persisted)
+can show a recognised card was tapped but never *who* tapped it, and a lost card can only be
+removed by reflashing the whole whitelist rather than revoking one entry. That is a genuine
+limitation of a bare, unconnected Uno, not a property of RFID as a technology - the chip in a
+card is capable of carrying a unique identity, but turning that into individual accountability
+needs persistent storage, a reporting channel and a server-side roster this board does not have.
+Fixing it needs a credential nobody else can produce *and* a system that remembers who used it -
+a face, a fingerprint, a personal card checked against a live roster - and that is not a firmware
+change on an ATmega328P. It is a different board, a camera or a networked reader, and a
+recognition or roster pipeline. Iteration 5 is that change.
 
-**Note on an earlier, separate build:** a different keypad-and-lockout Arduino project
+**Note on two earlier, separate builds:** a different keypad-and-lockout Arduino project
 (https://wokwi.com/projects/474615233358282753) was built independently, before Systems One-Three
-were identified as the official starting material. It covers similar ground but was not designed as
-an explicit answer to System Three's stated limitation, so System Four above is the version this
-report and demonstration should present as the fourth iteration. The earlier build is not deleted
-and remains usable as extra evidence of iteration if needed, but the two should not both be
-presented as "the" iteration 4 in the same document - it invites the question of which one is real.
+were identified as the official starting material; it was never presented as "the" iteration 4.
+The keypad build that *was* presented as iteration 4 until 2026-09-20
+(https://wokwi.com/projects/475228123420711937) has not been deleted either - it is kept,
+unedited, as the version handed on as evidence for another end user's own, separate submission,
+and should not also be presented as this project's iteration 4 alongside the RFID version above.
+Only the RFID build at the URL given above is this report's fourth iteration.
 
 ---
 
@@ -264,19 +284,36 @@ building once they realise a camera is what stands between them and the door. �
 
 ## Iteration 6 - the failover layer, and a design considered and declined
 
-**Source:** this project's own build, 07.09.2026.
-**Built:** a second Arduino Uno, wired as a standalone watchdog with an RFID reader and its own
-EEPROM ring-buffer journal. It listens for a 1 Hz heartbeat from the ESP32 gate; if that heartbeat
-stops (the gate's ESP32 dies, loses WiFi, or the brain itself dies), the Uno wakes and grants entry
-on a known RFID card instead of a face, logging every such entry into a ring buffer in its own
+**Source:** this project's own build, 07.09.2026. Credential strengthened to two factors,
+20.09.2026 (see below).
+**Built:** a second Arduino Uno, wired as a standalone watchdog with an RFID reader, a 4-button
+PIN pad, and its own EEPROM ring-buffer journal. It listens for a 1 Hz heartbeat from the ESP32
+gate; if that heartbeat stops (the gate's ESP32 dies, loses WiFi, or the brain itself dies), the
+Uno wakes and grants entry on a known RFID card *and* its matching PIN entered on four buttons,
+logging every attempt - granted, denied, or right card/wrong PIN - into a ring buffer in its own
 EEPROM. When the smart system recovers, the brain imports that journal and only then erases it -
 never before the import is confirmed, so a second failure mid-import cannot lose the record.
 
-**Why this is not "iteration 4's keypad again":** it is tempting to see a second Uno with a
-credential reader and assume it duplicates iteration 4. It does not - iteration 4 is the primary,
-everyday access path; this Uno is a *last resort* that exists only when everything smarter than it
-has already failed, and its one design requirement is having no dependency that could fail alongside
-whatever it is standing in for.
+**Correction (2026-09-20) - why the credential changed again:** iteration 4's own Uno prototype
+moved from a keypad PIN to an RFID card (see its own correction note above), which took away the
+distinction this section originally rested on - "iteration 4 is a keypad, this is a card reader".
+Rather than pick a third, unrelated credential purely to look different on paper, this board's
+credential was strengthened instead: it now asks for the card *and* a short PIN unique to that
+card, entered on four buttons documented in `firmware/uno_watchdog/WIRING.md`. The reasoning in
+`docs/REPORT_NOTES.md` sets out why this reads as a genuine improvement rather than a forced one -
+a card alone is "something you have", clonable by anyone who reads its UID; the layer that only
+gets used once every smarter system has already died is a reasonable place to require two factors
+instead of one, not a coincidental way of avoiding a naming clash with iteration 4.
+
+**Why this is not "iteration 4's card reader again":** it is tempting to see a second Uno with a
+credential reader and assume it duplicates iteration 4. It does not, for two independent reasons.
+First, role: iteration 4 is the primary, everyday access path; this Uno is a *last resort* that
+exists only when everything smarter than it has already failed, and its one design requirement is
+having no dependency that could fail alongside whatever it is standing in for. Second, strength:
+iteration 4 checks one factor - a card - at a staffed, monitored, everyday entrance; this board
+checks two - a card and a PIN unique to it - precisely because it is what stands between an
+intruder and the building on the one night the smart system is actually down, with nobody
+watching a screen to notice a bare-UID clone being tried.
 
 **The idea proposed, and the reasoning for declining it:** the original instinct was to do better
 than a static RFID card, which is clonable by anyone who learns its ID. The proposal on the table -
@@ -285,11 +322,12 @@ onto the Uno, rotating on every recovery - was recorded and evaluated seriously,
 fails for a reason that generalises: it depends on the very thing that is expected to have failed.
 Of the three failures the layer exists for (the gate ESP32 dies, it loses WiFi, or the brain dies),
 the brain dying is exactly the case with nobody left to send a code, and a recipient's phone needs
-working network to receive one regardless. **Decision: keep RFID.** Rotation is the right thing to
-want and the wrong thing to buy at the cost of the one property - needing no network, no internet,
-no charged phone, no delivery - that makes a last line of defence trustworthy. Recorded in full in
-`docs/REPORT_NOTES.md` because a rejected design with a stated reason is stronger D-level evidence
-than a list of what shipped.
+working network to receive one regardless. **Decision: keep RFID, add a PIN.** Rotation is the
+right thing to want and the wrong thing to buy at the cost of the one property - needing no
+network, no internet, no charged phone, no delivery - that makes a last line of defence
+trustworthy; a fixed, per-card PIN raises the bar against a cloned card without giving up any of
+those four properties. Recorded in full in `docs/REPORT_NOTES.md` because a rejected design with a
+stated reason is stronger D-level evidence than a list of what shipped.
 
 **What was corrected by real feedback on this same design:** the ring buffer's overflow behaviour
 was originally going to stop recording once full. The actual instruction was the opposite - *"при
@@ -302,8 +340,8 @@ guard already carries for a dozen other doors, was the reassuring part - not a n
 remember for the one night a year it might matter.
 
 **Known limitation, named rather than hidden:** the Uno's card list is a mirror of who currently
-holds a valid card, hand-compiled rather than synced live, so it goes stale the moment someone's
-access is revoked on the brain and nobody remembers to update the Uno too. This is recorded as a
+holds a valid card and knows its PIN, hand-compiled rather than synced live, so it goes stale the
+moment someone's access is revoked on the brain and nobody remembers to update the Uno too. This is recorded as a
 limitation of the failover layer specifically, distinct from anything iterations 1-5 had to deal
 with, because none of them had a second, disconnected store of the same information to fall out of
 sync with.
@@ -515,14 +553,14 @@ a sales pitch and will not reach Distinction.
 
 ### What genuinely improves, iteration by iteration
 
-| Working practice | Before (nothing built) | After iteration 4 (Uno, keypad) | After iteration 9 (ESP32, current state) |
+| Working practice | Before (nothing built) | After iteration 4 (Uno, RFID card) | After iteration 9 (ESP32, current state) |
 |---|---|---|---|
 | Coverage of the entrance | Only while a guard is present | Continuous | Continuous |
 | Nature of the alert | - | A labelled risk tier, then a credential check | A named recognition event |
 | Authorisation decision | The guard, face to face | The system, on a shared credential | The system, on an individual credential |
-| Accountability | None recorded | A valid code was used (not by whom) | A named person was recognised |
-| Social pressure on staff | Guard has to refuse colleagues personally | Removed - the keypad refuses | Removed - the system refuses |
-| Data the system holds about a person | None | None (a PIN is not personal data) | Biometric data (special category, Article 9) |
+| Accountability | None recorded | A recognised card was tapped (not by whom) | A named person was recognised |
+| Social pressure on staff | Guard has to refuse colleagues personally | Removed - the reader refuses | Removed - the system refuses |
+| Data the system holds about a person | None | None logged (a bare UID check, no name attached) | Biometric data (special category, Article 9) |
 | What happens if the smart system dies | No fallback - the keypad itself is the only layer | Same | RFID failover on a second Uno, journalled and reconciled (iteration 6) |
 | Response to its own defects | Fixed when a tester noticed | Same | A structured adversarial review, run twice, not just user reports (iteration 8) |
 
@@ -541,7 +579,8 @@ when it fails and how it finds its own mistakes, and both are now answered rathe
    This is precisely why iteration 4 moved to authentication rather than tuning the threshold
    further, and why the ESP32 gate's own passage sensor needs the same fix rather than being
    trusted on its own.
-2. **A shared PIN provides no individual accountability** (iteration 4's own limitation, fixed from
+2. **A shared, unlogged credential provides no individual accountability** (iteration 4's own
+   limitation - first a PIN, now an RFID card checked against a bare whitelist - fixed from
    iteration 5 onward, at the cost below).
 3. **Biometric data is a governance obligation a PIN never was** (iteration 5's own cost, see
    above and the report's LO4/D3 discussion).
@@ -564,8 +603,9 @@ when it fails and how it finds its own mistakes, and both are now answered rathe
 
 For LO4 and D3 there is a genuinely interesting inversion here: the *simpler*, earlier iteration is
 the more defensible one under data protection law. Iterations 1-4 store no personal data at all - a
-PIN is a shared secret, not biometric data, so UK GDPR Article 9 does not apply to any of them and
-there is no special-category processing to justify. Iteration 5 onward, which is where the
+PIN was a shared secret, and an RFID UID is neither biometric nor logged against a name in this
+design, so UK GDPR Article 9 does not apply to any of them and there is no special-category
+processing to justify. Iteration 5 onward, which is where the
 accountability problem actually gets solved, is where the system starts carrying a DPIA obligation,
 a retention policy and a lawful-basis argument. That trade-off between accountability and privacy is
 exactly the kind of thing D3 asks you to defend rather than dodge, and it only exists because the
@@ -580,9 +620,9 @@ project did not stop at iteration 4.
 | 1 - buzzer alarm | Moodle "Alarm System One", reproduced | https://wokwi.com/projects/475226607766686721 |
 | 2 - graduated LED/tone | Moodle "Alarm System Two", reproduced | https://wokwi.com/projects/475226727289705473 |
 | 3 - LCD risk display | Moodle "Alarm System Three", reproduced | https://wokwi.com/projects/475226849953199105 |
-| 4 - keypad access control | This project's own design, on the required Uno | https://wokwi.com/projects/475228123420711937 |
+| 4 - RFID access control | This project's own design, on the required Uno (rebuilt from a keypad, 20.09) | https://wokwi.com/projects/475681794255610881 |
 | 5 - face recognition (Charon) | This project's own build, real hardware, ESP32 | this repository, commits `c065a03`-`da6d3a8` (03.09) |
-| 6 - RFID failover layer | Second Uno, watchdog + journal, real hardware | this repository, commits `48a8116`-`77b619a` (07.09) |
+| 6 - RFID + PIN failover layer | Second Uno, watchdog + journal, real hardware; PIN second factor added 20.09 | this repository, commits `48a8116`-`77b619a` (07.09), PIN update 20.09 |
 | 7 - operational fixes from real use | Loopback-exempt enrolment, two-defect review | this repository, commits `ce0f6af`, `002316e` (07.09) |
 | 8 - a fix that broke something, caught by review | Event-loop unblock, then a thread-safety fix | this repository, commits `ff46a4c` (08.09), `6941e8e` (11.09) |
 | 9 - camera always-on | Recognition range replaces wake-on-approach | this repository, commit `b0ee2a2` (13.09) |
@@ -593,6 +633,8 @@ the measurements behind iteration 9, is in `docs/REPORT_NOTES.md` - this file te
 belongs to; that one carries the numbers.
 
 Iteration 4 must not be edited casually - it is the version presented as the answer to iteration 3.
+As of 2026-09-20 that is the RFID build (`https://wokwi.com/projects/475681794255610881`), not the
+keypad build kept alongside it for a different end user's own submission (see Publishing status).
 Iterations 1-3 are reproductions of the official material and should stay byte-for-byte faithful to
 it; if they ever need rebuilding, `system_one/`, `system_two/`, `system_three/` and `system_four/`
 each hold the exact `sketch.ino` and `diagram.json` that were pasted in and saved.

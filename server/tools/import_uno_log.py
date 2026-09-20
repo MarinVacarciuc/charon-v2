@@ -33,6 +33,11 @@ OUTCOME_SEVERITY = {
     "granted": ("uno_failover_entry", "alert"),
     "denied": ("uno_failover_denied", "alert"),
     "approach_no_card": ("uno_failover_no_card", "alert"),
+    # A recognised card that never completed its PIN (added 2026-09-20 with the second
+    # factor). Distinct from "denied" on purpose: this is a card on the list that failed the
+    # second check, not a card that was never on it, and the two should not read the same way
+    # in the audit log.
+    "pin_fail": ("uno_failover_pin_fail", "alert"),
 }
 
 
@@ -116,8 +121,10 @@ async def import_rows(rows: list[dict], meta: dict, anchor: dt.datetime | None, 
             msg = f"during a smart-path outage somebody approached the gate and presented no card at {stamp}{approx}"
         elif r["outcome"] == "granted":
             msg = f"during a smart-path outage the gate failover admitted card {r['uid']} at {stamp}{approx}"
+        elif r["outcome"] == "pin_fail":
+            msg = f"during a smart-path outage card {r['uid']} was recognised but its PIN was wrong or not entered in time at {stamp}{approx}"
         else:
-            msg = f"during a smart-path outage the gate failover refused card {r['uid']} at {stamp}{approx}"
+            msg = f"during a smart-path outage the gate failover refused unknown card {r['uid']} at {stamp}{approx}"
         await audit.record(db, event_type, msg, severity=severity, actor="reconciliation",
                            details={"uid": r["uid"], "seconds_since_boot": r["seconds"],
                                     "outcome": r["outcome"], "anchored": exact})

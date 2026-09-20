@@ -3,49 +3,48 @@
   "author": "Marin Vacarciuc",
   "editor": "wokwi",
   "parts": [
-    { "type": "wokwi-arduino-uno", "id": "uno", "top": 260, "left": 160, "attrs": {} },
-    { "type": "wokwi-hc-sr04", "id": "sonar", "top": -80, "left": 520, "attrs": {} },
-    { "type": "wokwi-lcd1602", "id": "lcd", "top": 20, "left": 20, "attrs": { "pins": "i2c" } },
-    { "type": "wokwi-membrane-keypad", "id": "keypad", "top": 200, "left": -260, "attrs": {} },
+    { "type": "wokwi-arduino-uno", "id": "uno", "top": 0, "left": 0, "attrs": {} },
+    { "type": "wokwi-hc-sr04", "id": "ultrasonic1", "top": -100, "left": 200, "attrs": {} },
+    { "type": "wokwi-lcd1602", "id": "lcd1", "top": -260, "left": -20, "attrs": { "pins": "i2c" } },
+    { "type": "board-mfrc522", "id": "rfid1", "top": -160, "left": 480, "attrs": {} },
 
-    { "type": "wokwi-led", "id": "ledGreen", "top": -60, "left": 480, "attrs": { "color": "green" } },
-    { "type": "wokwi-resistor", "id": "rGreen", "top": 20, "left": 484, "rotate": 90, "attrs": { "value": "220" } },
+    { "type": "wokwi-resistor", "id": "r_armed", "top": 120, "left": 460, "attrs": { "value": "220" }, "rotate": 90 },
+    { "type": "wokwi-led", "id": "led_armed", "top": 120, "left": 520, "attrs": { "color": "green" } },
 
-    { "type": "wokwi-led", "id": "ledRed", "top": -60, "left": 540, "attrs": { "color": "red" } },
-    { "type": "wokwi-resistor", "id": "rRed", "top": 20, "left": 544, "rotate": 90, "attrs": { "value": "220" } },
+    { "type": "wokwi-resistor", "id": "r_alarm", "top": 200, "left": 560, "attrs": { "value": "220" }, "rotate": 90 },
+    { "type": "wokwi-led", "id": "led_alarm", "top": 200, "left": 620, "attrs": { "color": "red" } },
 
-    { "type": "wokwi-buzzer", "id": "bz1", "top": -60, "left": 600, "attrs": { "volume": "0.1" } }
+    { "type": "wokwi-buzzer", "id": "bz1", "top": 240, "left": 260, "attrs": {} }
   ],
   "connections": [
-    [ "sonar:VCC", "uno:5V", "red", [ "v0" ] ],
-    [ "sonar:GND", "uno:GND.1", "black", [ "v0" ] ],
-    [ "sonar:TRIG", "uno:9", "green", [ "v0" ] ],
-    [ "sonar:ECHO", "uno:8", "blue", [ "v0" ] ],
+    [ "uno:5V", "ultrasonic1:VCC", "red", [] ],
+    [ "uno:GND.1", "ultrasonic1:GND", "black", [] ],
+    [ "uno:2", "ultrasonic1:TRIG", "green", [] ],
+    [ "uno:3", "ultrasonic1:ECHO", "yellow", [] ],
 
-    [ "lcd:SDA", "uno:A4", "green", [ "v0" ] ],
-    [ "lcd:SCL", "uno:A5", "yellow", [ "v0" ] ],
-    [ "lcd:VCC", "uno:5V", "red", [ "v0" ] ],
-    [ "lcd:GND", "uno:GND.2", "black", [ "v0" ] ],
+    [ "uno:5V", "lcd1:VCC", "red", [] ],
+    [ "uno:GND.2", "lcd1:GND", "black", [] ],
+    [ "uno:A4", "lcd1:SDA", "blue", [] ],
+    [ "uno:A5", "lcd1:SCL", "cyan", [] ],
 
-    [ "keypad:R1", "uno:5", "green", [ "v0" ] ],
-    [ "keypad:R2", "uno:4", "green", [ "v0" ] ],
-    [ "keypad:R3", "uno:3", "green", [ "v0" ] ],
-    [ "keypad:R4", "uno:2", "green", [ "v0" ] ],
-    [ "keypad:C1", "uno:7", "blue", [ "v0" ] ],
-    [ "keypad:C2", "uno:6", "blue", [ "v0" ] ],
-    [ "keypad:C3", "uno:A1", "blue", [ "v0" ] ],
-    [ "keypad:C4", "uno:A0", "blue", [ "v0" ] ],
+    [ "uno:3.3V", "rfid1:3.3V", "red", [] ],
+    [ "uno:GND.3", "rfid1:GND", "black", [] ],
+    [ "uno:9", "rfid1:RST", "orange", [] ],
+    [ "uno:12", "rfid1:MISO", "magenta", [] ],
+    [ "uno:11", "rfid1:MOSI", "lightgreen", [] ],
+    [ "uno:13", "rfid1:SCK", "white", [] ],
+    [ "uno:10", "rfid1:SDA", "pink", [] ],
 
-    [ "ledGreen:A", "uno:12", "green", [ "v0" ] ],
-    [ "ledGreen:C", "rGreen:1", "black", [ "v0" ] ],
-    [ "rGreen:2", "uno:GND.2", "black", [ "v0" ] ],
+    [ "uno:5", "r_armed:2", "green", [] ],
+    [ "r_armed:1", "led_armed:A", "green", [] ],
+    [ "led_armed:C", "uno:GND.2", "black", [] ],
 
-    [ "ledRed:A", "uno:13", "red", [ "v0" ] ],
-    [ "ledRed:C", "rRed:1", "black", [ "v0" ] ],
-    [ "rRed:2", "uno:GND.2", "black", [ "v0" ] ],
+    [ "uno:6", "r_alarm:2", "red", [] ],
+    [ "r_alarm:1", "led_alarm:A", "red", [] ],
+    [ "led_alarm:C", "uno:GND.3", "black", [] ],
 
-    [ "bz1:1", "uno:GND.2", "black", [ "v0" ] ],
-    [ "bz1:2", "uno:10", "green", [ "v0" ] ]
+    [ "uno:4", "bz1:2", "purple", [] ],
+    [ "bz1:1", "uno:GND.2", "black", [] ]
   ],
   "dependencies": {}
 }
